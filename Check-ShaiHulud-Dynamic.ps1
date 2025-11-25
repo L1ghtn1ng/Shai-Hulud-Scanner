@@ -204,6 +204,13 @@ $PackageFeedUrls = @(
     # Add other feeds here as they become available.
 )
 
+# Local cache snapshot for compromised package list (used if feeds are unreachable)
+$CompromisedPackageCacheFile = if ($PSScriptRoot) {
+    Join-Path $PSScriptRoot "compromised-packages-cache.txt"
+} else {
+    ".\compromised-packages-cache.txt"
+}
+
 # Known Shai-Hulud artefact filenames (workflows / payloads).
 # Updated to include Shai-Hulud 2.0 IOCs (November 2025)
 $MaliciousFileNames = @(
@@ -294,7 +301,8 @@ function Write-Section {
 
 function Get-CompromisedPackageList {
     param(
-        [string[]]$Urls
+        [string[]]$Urls,
+        [string]$CacheFile
     )
 
     $allPkgs = New-Object System.Collections.Generic.HashSet[string]
@@ -323,6 +331,34 @@ function Get-CompromisedPackageList {
     }
 
     Write-Progress -Activity "Fetching compromised package lists" -Completed
+
+    # Cache the successful fetch for offline use
+    if ($allPkgs.Count -gt 0 -and $CacheFile) {
+        try {
+            $allPkgs | Sort-Object | Out-File -FilePath $CacheFile -Encoding UTF8 -Force
+        }
+        catch {
+            Write-Host "[!] Failed to write cache file $CacheFile : $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    # Fallback to cached snapshot if feeds failed
+    if ($allPkgs.Count -eq 0 -and $CacheFile -and (Test-Path $CacheFile)) {
+        try {
+            Write-Host "[*] Loading compromised package snapshot from cache: $CacheFile" -ForegroundColor Yellow
+            $cached = Get-Content $CacheFile -ErrorAction Stop
+            foreach ($line in $cached) {
+                $clean = ($line.Trim() -split '[,;|\s]')[0]
+                if (![string]::IsNullOrWhiteSpace($clean) -and -not $clean.StartsWith("#")) {
+                    [void]$allPkgs.Add($clean)
+                }
+            }
+        }
+        catch {
+            Write-Host "[!] Failed to load cache file $CacheFile : $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
     Write-Host "[*] Total unique compromised package identifiers loaded: $($allPkgs.Count)"
     return $allPkgs
 }
@@ -511,31 +547,55 @@ function Scan-NpmCache {
     }
 
     Write-Host "[*] Scanning npm cache at: $CachePath"
-    Write-Progress -Activity "Scanning npm cache" -Status "Enumerating cache directories..."
+
+    # Build a single regex to match any compromised package identifier (version delimiters can be :, -, or _)
+    $groupNames = @{}
+    $patterns = @()
+    $idx = 0
+    foreach ($pkg in $CompromisedPackages) {
+        $groupName = "pkg$idx"
+        $escaped = [regex]::Escape($pkg) -replace "\\:", "[:_\-]"
+        $patterns += "(?<$groupName>$escaped)"
+        $groupNames[$groupName] = $pkg
+        $idx++
+    }
+
+    if ($patterns.Count -eq 0) {
+        return $hits
+    }
+
+    $cacheRegex = [regex]::new("(?i)(" + ($patterns -join "|") + ")")
 
     try {
-        $cacheItems = @(Get-ChildItem -Path $CachePath -Recurse -Directory -ErrorAction SilentlyContinue)
-        $totalItems = $cacheItems.Count
-        $currentItem = 0
+        $checked = 0
         $lastProgressUpdate = 0
 
-        foreach ($item in $cacheItems) {
-            $currentItem++
-            # Update progress every 100 items to avoid slowdown
-            if (($currentItem - $lastProgressUpdate) -ge 100) {
-                $lastProgressUpdate = $currentItem
-                Write-Progress -Activity "Scanning npm cache" -Status "$currentItem of $totalItems directories checked" -PercentComplete (($currentItem / [Math]::Max($totalItems, 1)) * 100)
+        Get-ChildItem -Path $CachePath -Recurse -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $checked++
+
+            if (($checked - $lastProgressUpdate) -ge 200) {
+                $lastProgressUpdate = $checked
+                Write-Progress -Activity "Scanning npm cache" -Status "$checked directories checked"
             }
 
-            foreach ($pkg in $CompromisedPackages) {
-                # A simple contains match - cache folders often include package name + version
-                if ($item.FullName -like "*$pkg*") {
-                    Write-Host "    [!] FOUND in cache: $pkg" -ForegroundColor Red
-                    $hits += [PSCustomObject]@{
-                        Location = $item.FullName
-                        Package  = $pkg
-                        Type     = "npm-cache"
+            $match = $cacheRegex.Match($_.FullName)
+            if ($match.Success) {
+                $matchedPkg = $null
+                foreach ($g in $cacheRegex.GetGroupNames()) {
+                    if ($g -notlike "pkg*") { continue }
+                    if ($match.Groups[$g].Success) {
+                        $matchedPkg = $groupNames[$g]
+                        break
                     }
+                }
+
+                if (-not $matchedPkg) { $matchedPkg = $match.Value }
+
+                Write-Host "    [!] FOUND in cache: $matchedPkg" -ForegroundColor Red
+                $hits += [PSCustomObject]@{
+                    Location = $_.FullName
+                    Package  = $matchedPkg
+                    Type     = "npm-cache"
                 }
             }
         }
@@ -998,12 +1058,43 @@ function Scan-FileHashes {
             Write-Progress -Activity "Hash-based malware scan" -Status "Targeted scan for suspicious files..."
 
             try {
-                # Quick mode: only hash files with suspicious names
+                # Quick mode: single pass for suspicious filenames, skip nested node_modules to keep the fast path fast
+                $suspiciousSet = New-Object System.Collections.Generic.HashSet[string]
+                $suspiciousNames | ForEach-Object { [void]$suspiciousSet.Add($_) }
+
+                # Track how deep we are inside node_modules (0 = outside, 1 = node_modules, 2 = package root)
+                $queue = New-Object 'System.Collections.Generic.Queue[psobject]'
+                $queue.Enqueue([PSCustomObject]@{ Path = $root; NodeDepth = 0 })
                 $files = @()
-                foreach ($name in $suspiciousNames) {
-                    $found = Get-ChildItem -Path $root -Recurse -File -Filter $name -ErrorAction SilentlyContinue |
-                        Where-Object { $_.FullName -notmatch "node_modules\\.*node_modules" }
-                    $files += $found
+
+                while ($queue.Count -gt 0) {
+                    $entry = $queue.Dequeue()
+                    $currentDir = $entry.Path
+                    $nodeDepth = [int]$entry.NodeDepth
+
+                    try {
+                        $files += Get-ChildItem -Path $currentDir -File -ErrorAction SilentlyContinue |
+                            Where-Object { $suspiciousSet.Contains($_.Name) }
+
+                        # Do not descend deeper than package root when inside node_modules
+                        if ($nodeDepth -ge 2) { continue }
+
+                        $subDirs = Get-ChildItem -Path $currentDir -Directory -ErrorAction SilentlyContinue
+                        foreach ($subDir in $subDirs) {
+                            $childDepth = $nodeDepth
+                            if ($subDir.Name -eq "node_modules") {
+                                $childDepth = 1
+                            } elseif ($nodeDepth -gt 0) {
+                                $childDepth = $nodeDepth + 1
+                            }
+
+                            # Skip nested node_modules trees beyond first level
+                            if ($childDepth -gt 2) { continue }
+
+                            $queue.Enqueue([PSCustomObject]@{ Path = $subDir.FullName; NodeDepth = $childDepth })
+                        }
+                    }
+                    catch { }
                 }
             }
             catch {
@@ -1293,7 +1384,7 @@ function Scan-SuspiciousEnvPatterns {
 $ScanStartTime = Get-Date
 
 Write-Section "Loading compromised package lists"
-$Compromised = Get-CompromisedPackageList -Urls $PackageFeedUrls
+$Compromised = Get-CompromisedPackageList -Urls $PackageFeedUrls -CacheFile $CompromisedPackageCacheFile
 
 if ($Compromised.Count -eq 0) {
     Write-Host "[!] No compromised packages loaded from feeds. The scan will continue with only file-based IOCs." -ForegroundColor Yellow
