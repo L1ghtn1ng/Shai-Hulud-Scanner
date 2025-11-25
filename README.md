@@ -1,6 +1,6 @@
 # Shai-Hulud Detection Scanner
 
-A PowerShell-based security scanner for detecting the **Shai-Hulud** npm supply chain malware on Windows systems.
+A cross-platform security scanner for detecting the **Shai-Hulud** npm supply chain malware. Available for both Windows (PowerShell) and Unix/Linux/macOS (Bash).
 
 ## Background
 
@@ -34,15 +34,35 @@ The scanner performs the following checks:
 
 ## Requirements
 
+### PowerShell (Windows)
 - Windows PowerShell 5.1 or later
 - Git (optional, for branch/remote analysis)
 - npm (optional, for cache path detection)
 
+### Bash (Linux/macOS/WSL)
+- Bash 4.0 or later (for associative arrays)
+- curl (for fetching IOC feeds)
+- Git (optional, for branch/remote analysis)
+- npm (optional, for cache path detection)
+- Python 3 (for JSON parsing in postinstall hook analysis)
+- Standard Unix utilities: `find`, `sha256sum`, `sha1sum`, `grep`
+
 ## Installation
 
-Clone or download `Check-ShaiHulud-Dynamic.ps1` to your system. No additional dependencies required.
+Clone or download the repository to your system:
+
+```bash
+git clone https://github.com/your-repo/shai-hulud-scanner.git
+cd shai-hulud-scanner
+```
+
+Or download the individual script for your platform:
+- **Windows**: `Check-ShaiHulud-Dynamic.ps1`
+- **Unix/Linux/macOS**: `Check-ShaiHulud-Dynamic.sh`
 
 ## Usage
+
+### PowerShell (Windows)
 
 ```powershell
 # Allow script execution (session-only)
@@ -61,7 +81,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\Check-ShaiHulud-Dynamic.ps1 -RootPaths "C:\Projects" -ReportPath "C:\Reports\scan.txt"
 ```
 
-### Parameters
+#### PowerShell Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -69,7 +89,38 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 | `-ScanMode` | `Quick` | `Quick` for fast scan, `Full` for comprehensive |
 | `-ReportPath` | `.\ShaiHulud-Scan-Report.txt` | Output file for detailed report |
 
-### Scan Modes
+### Bash (Linux/macOS/WSL)
+
+```bash
+# Make the script executable
+chmod +x Check-ShaiHulud-Dynamic.sh
+
+# Quick scan (default) - fast, covers common IOCs
+./Check-ShaiHulud-Dynamic.sh -r ~/projects
+
+# Full scan - comprehensive, takes longer
+./Check-ShaiHulud-Dynamic.sh -r ~/projects -m full
+
+# Scan multiple directories (comma-separated)
+./Check-ShaiHulud-Dynamic.sh -r ~/projects,~/work -m full
+
+# Custom report output path
+./Check-ShaiHulud-Dynamic.sh -r ~/projects -o ~/reports/scan.txt
+
+# Show help
+./Check-ShaiHulud-Dynamic.sh -h
+```
+
+#### Bash Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-r, --roots` | `$HOME` | Comma-separated directories to scan |
+| `-m, --mode` | `quick` | `quick` for fast scan, `full` for comprehensive |
+| `-o, --report` | `./ShaiHulud-Scan-Report.txt` | Output file for detailed report |
+| `-h, --help` | - | Show usage help |
+
+## Scan Modes
 
 **Quick Mode** (~10-30 seconds)
 - Scans top-level `node_modules` only (depth-limited)
@@ -146,18 +197,37 @@ malware-hash      SHA256 match: Shai-Hulud bundle.js   C:\Projects\app\dist\bund
 
 The scanner is optimized for large codebases:
 
-- **HashSet lookups** for O(1) package matching (vs O(n) iteration)
+- **HashSet/associative array lookups** for O(1) package matching (vs O(n) iteration)
 - **Scoped package separation** - pre-sorts `@scope/package` format for efficient matching
 - **Depth-limited Quick mode** - avoids deep recursion in `node_modules`
-- **Progress throttling** - updates every 50-100 items to reduce overhead
+- **Progress throttling** - updates every 50-100 items to reduce overhead (PowerShell)
 - **Early termination** - skips redundant checks when matches found
+- **Compiled regex** - single-pass pattern matching for npm cache scan
+
+## Offline Support
+
+Both scripts support offline operation:
+
+1. On first successful run, the compromised packages list is cached locally to `compromised-packages-cache.txt`
+2. If the IOC feed is unreachable, the scanner falls back to the cached snapshot
+3. File-based IOC checks (hashes, filenames, patterns) work without network access
+
+## Platform Differences
+
+| Feature | PowerShell | Bash |
+|---------|------------|------|
+| Progress indicators | Yes (`Write-Progress`) | No |
+| JSON parsing | Built-in (`ConvertFrom-Json`) | Requires Python 3 |
+| Color output | Yes | Yes (ANSI codes) |
+| ASCII banner | Yes | Yes |
+| Parallel execution | No | No |
 
 ## Limitations
 
 - **Read-only** - does not delete or modify any files
-- **Windows only** - uses PowerShell-specific features
-- **Network required** - fetches live IOC feeds (will continue with local checks if offline)
+- **Network recommended** - fetches live IOC feeds (will continue with local checks if offline)
 - **False positives possible** - some patterns (like `node -e` in postinstall) may flag legitimate packages
+- **Bash requires Python 3** - for JSON parsing in postinstall hook analysis
 
 ## References
 
@@ -168,13 +238,21 @@ The scanner is optimized for large codebases:
 
 ## Contributing
 
-To add new IOCs, update the following sections in the script:
+To add new IOCs, update the following sections in the scripts:
 
+### PowerShell (`Check-ShaiHulud-Dynamic.ps1`)
 - `$MaliciousFileNames` - known malicious filenames
 - `$SuspiciousBranchPatterns` - git branch patterns
 - `$MaliciousHashes` / `$MaliciousHashesSHA1` - file hashes
 - `$SuspiciousWorkflowPatterns` - GitHub Actions patterns
 - `$SuspiciousPostinstallPatterns` - npm script patterns
+
+### Bash (`Check-ShaiHulud-Dynamic.sh`)
+- `MALICIOUS_FILES` - known malicious filenames
+- `SUSPICIOUS_BRANCH_PATTERNS` - git branch patterns
+- `MAL_SHA256` / `MAL_SHA1` - file hashes
+- `SUSPICIOUS_WORKFLOW_PATTERNS` - GitHub Actions patterns
+- `SUSPICIOUS_HOOK_PATTERNS` - npm script patterns
 
 ## License
 
