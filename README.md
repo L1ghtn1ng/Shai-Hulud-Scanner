@@ -93,22 +93,22 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 ```bash
 # Make the script executable
-chmod +x Check-ShaiHulud-Dynamic.sh
+chmod +x Check-ShaiHulud-Dynamic-macOS.sh
 
 # Quick scan (default) - fast, covers common IOCs
-./Check-ShaiHulud-Dynamic.sh -r ~/projects
+./Check-ShaiHulud-Dynamic-macOS.sh -r ~/projects
 
 # Full scan - comprehensive, takes longer
-./Check-ShaiHulud-Dynamic.sh -r ~/projects -m full
+./Check-ShaiHulud-Dynamic-macOS.sh -r ~/projects -m full
 
 # Scan multiple directories (comma-separated)
-./Check-ShaiHulud-Dynamic.sh -r ~/projects,~/work -m full
+./Check-ShaiHulud-Dynamic-macOS.sh -r ~/projects,~/work -m full
 
 # Custom report output path
-./Check-ShaiHulud-Dynamic.sh -r ~/projects -o ~/reports/scan.txt
+./Check-ShaiHulud-Dynamic-macOS.sh -r ~/projects -o ~/reports/scan.txt
 
 # Show help
-./Check-ShaiHulud-Dynamic.sh -h
+./Check-ShaiHulud-Dynamic-macOS.sh -h
 ```
 
 #### Bash Parameters
@@ -257,3 +257,4 @@ To add new IOCs, update the following sections in the scripts:
 ## License
 
 MIT
+
