@@ -4,12 +4,15 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"shai-hulud-scanner/pkg/scanner"
 )
 
-const version = "1.0.1"
+const version = "1.0.2"
+
+const defaultReportName = "ShaiHulud-Scan-Report.txt"
 
 const bannerNarrow = `
    ___  _  _   _   ___      _  _ _   _ _    _   _ ___
@@ -46,7 +49,7 @@ func main() {
 	// Define flags
 	var (
 		mode       = flag.String("mode", "quick", "Scan mode: quick or full")
-		reportPath = flag.String("report", "./ShaiHulud-Scan-Report.txt", "Report output path")
+		reportPath = flag.String("report", "./"+defaultReportName, "Report output path")
 		noBanner   = flag.Bool("no-banner", false, "Do not print the banner")
 		filesOnly  = flag.Bool("files-only", false, "Only scan for malicious files (skip git, npm cache, etc.)")
 		showHelp   = flag.Bool("help", false, "Show help message")
@@ -56,6 +59,21 @@ func main() {
 	flag.Usage = printUsage
 
 	flag.Parse()
+
+	// Normalize report path: if a directory is provided, place the report file
+	// inside that directory using the default report name.
+	resolvedReportPath := *reportPath
+	if info, err := os.Stat(resolvedReportPath); err == nil && info.IsDir() {
+		resolvedReportPath = filepath.Join(resolvedReportPath, defaultReportName)
+	} else {
+		// If the path does not currently exist but clearly looks like a directory
+		// (for example, ends with a path separator), treat it as a directory and
+		// append the default report name. This keeps behavior intuitive when
+		// users pass values like "/tmp/" or "./reports/".
+		if strings.HasSuffix(resolvedReportPath, string(os.PathSeparator)) {
+			resolvedReportPath = filepath.Join(resolvedReportPath, defaultReportName)
+		}
+	}
 
 	if *showVer {
 		fmt.Printf("shai-hulud-scanner version %s\n", version)
@@ -107,7 +125,7 @@ func main() {
 	cfg := &scanner.Config{
 		RootPaths:  rootPaths,
 		ScanMode:   scanner.ScanMode(scanMode),
-		ReportPath: *reportPath,
+		ReportPath: resolvedReportPath,
 		NoBanner:   *noBanner,
 		FilesOnly:  *filesOnly,
 		Output:     os.Stdout,
@@ -122,8 +140,8 @@ func main() {
 	rpt.PrintSummary(os.Stdout)
 
 	fmt.Println()
-	fmt.Printf("[*] Writing detailed report to: %s\n", *reportPath)
-	if err := rpt.WriteToFile(*reportPath); err != nil {
+	fmt.Printf("[*] Writing detailed report to: %s\n", resolvedReportPath)
+	if err := rpt.WriteToFile(resolvedReportPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing report: %v\n", err)
 	} else {
 		fmt.Println("[*] Report written successfully.")
