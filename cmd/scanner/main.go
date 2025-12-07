@@ -10,7 +10,7 @@ import (
 	"shai-hulud-scanner/pkg/scanner"
 )
 
-const version = "1.0.2"
+const version = "1.0.3"
 
 const defaultReportName = "ShaiHulud-Scan-Report.txt"
 
@@ -103,7 +103,6 @@ func main() {
 		rootPaths = []string{homeDir}
 	}
 
-	// Print banner
 	if !*noBanner {
 		printBanner(os.Stdout)
 		fmt.Println("============================================")
@@ -121,15 +120,15 @@ func main() {
 		fmt.Println()
 	}
 
-	// Create scanner configuration
-	cfg := &scanner.Config{
-		RootPaths:  rootPaths,
-		ScanMode:   scanner.ScanMode(scanMode),
-		ReportPath: resolvedReportPath,
-		NoBanner:   *noBanner,
-		FilesOnly:  *filesOnly,
-		Output:     os.Stdout,
-	}
+	// Create a scanner configuration, starting from defaults so that
+	// features like feed caching are consistently enabled.
+	cfg := scanner.DefaultConfig()
+	cfg.RootPaths = rootPaths
+	cfg.ScanMode = scanner.ScanMode(scanMode)
+	cfg.ReportPath = resolvedReportPath
+	cfg.NoBanner = *noBanner
+	cfg.FilesOnly = *filesOnly
+	cfg.Output = os.Stdout
 	scan := scanner.New(cfg)
 	rpt, err := scan.Run()
 	if err != nil {
