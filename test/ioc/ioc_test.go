@@ -368,3 +368,94 @@ onlypkg,
 		t.Errorf("second.Versions = %#v, want [\"0.6.1\", \"0.6.2\"]", second.Versions)
 	}
 }
+
+func TestIsCompromisedNamespace(t *testing.T) {
+	tests := []struct {
+		name      string
+		namespace string
+		want      bool
+	}{
+		{"crowdstrike is compromised", "@crowdstrike", true},
+		{"art-ws is compromised", "@art-ws", true},
+		{"ngx is compromised", "@ngx", true},
+		{"ctrl is compromised", "@ctrl", true},
+		{"nativescript-community is compromised", "@nativescript-community", true},
+		{"ahmedhfarag is compromised", "@ahmedhfarag", true},
+		{"operato is compromised", "@operato", true},
+		{"teselagen is compromised", "@teselagen", true},
+		{"things-factory is compromised", "@things-factory", true},
+		{"hestjs is compromised", "@hestjs", true},
+		{"nstudio is compromised", "@nstudio", true},
+		{"basic-ui-components-stc is compromised", "@basic-ui-components-stc", true},
+		{"nexe is compromised", "@nexe", true},
+		{"thangved is compromised", "@thangved", true},
+		{"tnf-dev is compromised", "@tnf-dev", true},
+		{"ui-ux-gang is compromised", "@ui-ux-gang", true},
+		{"yoobic is compromised", "@yoobic", true},
+		{"random namespace is not compromised", "@random-namespace", false},
+		{"angular is not compromised", "@angular", false},
+		{"types is not compromised", "@types", false},
+		{"empty namespace", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ioc.IsCompromisedNamespace(tt.namespace); got != tt.want {
+				t.Errorf("IsCompromisedNamespace(%q) = %v, want %v", tt.namespace, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCompromisedNamespacesList(t *testing.T) {
+	if len(ioc.CompromisedNamespaces) == 0 {
+		t.Error("CompromisedNamespaces should not be empty")
+	}
+
+	expectedNamespaces := []string{
+		"@crowdstrike",
+		"@art-ws",
+		"@ngx",
+		"@ctrl",
+		"@nativescript-community",
+	}
+	for _, expected := range expectedNamespaces {
+		found := false
+		for _, ns := range ioc.CompromisedNamespaces {
+			if ns == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("CompromisedNamespaces missing expected namespace: %s", expected)
+		}
+	}
+
+	// Ensure all namespaces start with @
+	for _, ns := range ioc.CompromisedNamespaces {
+		if !strings.HasPrefix(ns, "@") {
+			t.Errorf("CompromisedNamespace should start with @: %s", ns)
+		}
+	}
+}
+
+func TestNewMaliciousSHA256Hashes(t *testing.T) {
+	// Test that new hashes from the shell script are present
+	newHashes := []string{
+		"de0e25a3e6c1e1e5998b306b7141b3dc4c0088da9d7bb47c1c00c91e6e4f85d6",
+		"81d2a004a1bca6ef87a1caf7d0e0b355ad1764238e40ff6d1b1cb77ad4f595c3",
+		"83a650ce44b2a9854802a7fb4c202877815274c129af49e6c2d1d5d5d55c501e",
+		"aba1fcbd15c6ba6d9b96e34cec287660fff4a31632bf76f2a766c499f55ca1ee",
+	}
+
+	for _, hash := range newHashes {
+		desc, found := ioc.IsMaliciousSHA256(hash)
+		if !found {
+			t.Errorf("Expected hash %s to be recognized as malicious", hash)
+		}
+		if desc == "" {
+			t.Errorf("Expected non-empty description for hash %s", hash)
+		}
+	}
+}

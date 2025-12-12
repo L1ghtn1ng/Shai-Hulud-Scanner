@@ -87,6 +87,10 @@ var MaliciousSHA256 = map[string]string{
 	"b74caeaa75e077c99f7d44f46daaf9796a3be43ecf24f2a1fd381844669da777": "Shai-Hulud malicious file",
 	"dc67467a39b70d1cd4c1f7f7a459b35058163592f4a9e8fb4dffcbba98ef210c": "Shai-Hulud malicious file",
 	"4b2399646573bb737c4969563303d8ee2e9ddbd1b271f1ca9e35ea78062538db": "Shai-Hulud malicious file",
+	"de0e25a3e6c1e1e5998b306b7141b3dc4c0088da9d7bb47c1c00c91e6e4f85d6": "Shai-Hulud malicious file",
+	"81d2a004a1bca6ef87a1caf7d0e0b355ad1764238e40ff6d1b1cb77ad4f595c3": "Shai-Hulud malicious file",
+	"83a650ce44b2a9854802a7fb4c202877815274c129af49e6c2d1d5d5d55c501e": "Shai-Hulud malicious file",
+	"aba1fcbd15c6ba6d9b96e34cec287660fff4a31632bf76f2a766c499f55ca1ee": "Shai-Hulud malicious file",
 }
 
 // MaliciousSHA1 maps known malicious SHA1 hashes to their descriptions (Shai-Hulud 2.0).
@@ -133,6 +137,38 @@ var RunnerDirPatterns = []string{
 	"actions-runner",
 	"_work",
 	"runner",
+}
+
+// CompromisedNamespaces contains npm scopes known to have been compromised in supply chain attacks.
+// Packages from these namespaces should be reviewed carefully.
+var CompromisedNamespaces = []string{
+	"@crowdstrike",
+	"@art-ws",
+	"@ngx",
+	"@ctrl",
+	"@nativescript-community",
+	"@ahmedhfarag",
+	"@operato",
+	"@teselagen",
+	"@things-factory",
+	"@hestjs",
+	"@nstudio",
+	"@basic-ui-components-stc",
+	"@nexe",
+	"@thangved",
+	"@tnf-dev",
+	"@ui-ux-gang",
+	"@yoobic",
+}
+
+// IsCompromisedNamespace checks if a namespace is in the compromised list.
+func IsCompromisedNamespace(namespace string) bool {
+	for _, ns := range CompromisedNamespaces {
+		if ns == namespace {
+			return true
+		}
+	}
+	return false
 }
 
 // PackageVersionConstraint represents a compromised package and the set of
