@@ -13,22 +13,24 @@ import (
 type FindingType string
 
 const (
-	FindingNodeModules        FindingType = "node_modules"
-	FindingNpmCache           FindingType = "npm-cache"
-	FindingFileArtefact       FindingType = "file-artefact"
-	FindingGitBranch          FindingType = "git-branch"
-	FindingGitRemote          FindingType = "git-remote"
-	FindingWorkflowPattern    FindingType = "workflow-pattern"
-	FindingWorkflowContent    FindingType = "workflow-content"
-	FindingCredentialFile     FindingType = "credential-file"
-	FindingMaliciousRunner    FindingType = "malicious-runner"
-	FindingRunnerInstallation FindingType = "runner-installation"
-	FindingPostinstallHook    FindingType = "postinstall-hook"
-	FindingMalwareHash        FindingType = "malware-hash"
-	FindingMigrationAttack    FindingType = "migration-attack"
-	FindingTrufflehog         FindingType = "trufflehog-installation"
-	FindingTrufflehogRef      FindingType = "trufflehog-reference"
-	FindingEnvExfil           FindingType = "env-exfil-pattern"
+	FindingNodeModules         FindingType = "node_modules"
+	FindingNpmCache            FindingType = "npm-cache"
+	FindingFileArtefact        FindingType = "file-artefact"
+	FindingGitBranch           FindingType = "git-branch"
+	FindingGitRemote           FindingType = "git-remote"
+	FindingWorkflowPattern     FindingType = "workflow-pattern"
+	FindingWorkflowContent     FindingType = "workflow-content"
+	FindingCredentialFile      FindingType = "credential-file"
+	FindingMaliciousRunner     FindingType = "malicious-runner"
+	FindingRunnerInstallation  FindingType = "runner-installation"
+	FindingPostinstallHook     FindingType = "postinstall-hook"
+	FindingMalwareHash         FindingType = "malware-hash"
+	FindingMigrationAttack     FindingType = "migration-attack"
+	FindingTrufflehog          FindingType = "trufflehog-installation"
+	FindingTrufflehogRef       FindingType = "trufflehog-reference"
+	FindingEnvExfil            FindingType = "env-exfil-pattern"
+	FindingCompromisedNS       FindingType = "compromised-namespace"
+	FindingLockfileCompromised FindingType = "lockfile-compromised"
 )
 
 // FindingSeverity represents the severity level of a finding.
@@ -42,22 +44,24 @@ const (
 
 // findingSeverityMap maps finding types to their default severity levels.
 var findingSeverityMap = map[FindingType]FindingSeverity{
-	FindingMalwareHash:        SeverityCritical,
-	FindingMaliciousRunner:    SeverityCritical,
-	FindingNodeModules:        SeverityHigh,
-	FindingNpmCache:           SeverityHigh,
-	FindingFileArtefact:       SeverityHigh,
-	FindingGitBranch:          SeverityHigh,
-	FindingGitRemote:          SeverityHigh,
-	FindingWorkflowPattern:    SeverityHigh,
-	FindingWorkflowContent:    SeverityWarning,
-	FindingCredentialFile:     SeverityWarning,
-	FindingRunnerInstallation: SeverityWarning,
-	FindingPostinstallHook:    SeverityWarning,
-	FindingMigrationAttack:    SeverityWarning,
-	FindingTrufflehog:         SeverityWarning,
-	FindingTrufflehogRef:      SeverityWarning,
-	FindingEnvExfil:           SeverityWarning,
+	FindingMalwareHash:         SeverityCritical,
+	FindingMaliciousRunner:     SeverityCritical,
+	FindingNodeModules:         SeverityHigh,
+	FindingNpmCache:            SeverityHigh,
+	FindingFileArtefact:        SeverityHigh,
+	FindingGitBranch:           SeverityHigh,
+	FindingGitRemote:           SeverityHigh,
+	FindingWorkflowPattern:     SeverityHigh,
+	FindingLockfileCompromised: SeverityHigh,
+	FindingWorkflowContent:     SeverityWarning,
+	FindingCredentialFile:      SeverityWarning,
+	FindingRunnerInstallation:  SeverityWarning,
+	FindingPostinstallHook:     SeverityWarning,
+	FindingMigrationAttack:     SeverityWarning,
+	FindingTrufflehog:          SeverityWarning,
+	FindingTrufflehogRef:       SeverityWarning,
+	FindingEnvExfil:            SeverityWarning,
+	FindingCompromisedNS:       SeverityWarning,
 }
 
 // GetDefaultSeverity returns the default severity for a finding type.

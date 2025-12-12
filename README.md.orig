@@ -28,8 +28,6 @@ The scanner performs the following checks:
 | Check | Quick Mode | Full Mode | Description |
 |-------|------------|-----------|-------------|
 | Compromised npm packages | Yes | Yes | Fetches live IOC feeds and scans `node_modules` |
-| Lockfile scanning | Yes | Yes | Detects compromised packages in `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml` |
-| Compromised namespaces | Yes | Yes | Flags packages from known compromised npm scopes |
 | npm cache scan | No | Yes | Scans npm cache for compromised packages |
 | Malicious file artefacts | Yes | Yes | Detects known Shai-Hulud files (`shai-hulud.js`, `setup_bun.js`, etc.) |
 | Git branch/remote analysis | Yes | Yes | Checks for suspicious branches and remotes |
@@ -41,8 +39,6 @@ The scanner performs the following checks:
 | Migration suffix detection | No | Yes | Identifies `-migration` repo attack pattern |
 | TruffleHog detection | PATH only | Yes | Detects credential harvesting tool |
 | Env+exfil pattern scan | No | Yes | Finds code combining env access with exfiltration |
-
-**Performance**: Scans run in parallel for faster execution.
 
 ---
 
@@ -118,16 +114,27 @@ The available flags map directly to `cmd/scanner/main.go`:
 
 | Flag | Default | Description |
 |------|---------|-------------|
+<<<<<<< HEAD
 | `-mode` | `quick` | Scan mode: `quick` or `full` |
 | `-report` | `./ShaiHulud-Scan-Report.txt` | File path for the detailed report |
 | `-cache` | system temp dir | Path for compromised package cache file |
 | `-no-banner` | `false` | Do not print the ASCII banner |
+=======
+| `-cache` | System temp dir | Directory in whch to store the compromised package cache file |
+>>>>>>> origin/main
 | `-files-only` | `false` | Only scan for malicious files (skip git, npm cache, etc.) |
 | `-strict` | `false` | Exit 1 on ANY finding including warnings (old behavior) |
 | `-warn-only` | `false` | Exit 0 on warnings, only fail on high+ severity findings |
 | `-config` | - | Path to allowlist configuration file (JSON) |
 | `-help` | - | Show help/usage information |
+<<<<<<< HEAD
 | `-V` | - | Print version and exit |
+=======
+| `-mode` | `quick` | Scan mode: `quick` or `full` |
+| `-no-banner` | `false` | Do not print the ASCII banner |
+| `-report` | `./ShaiHulud-Scan-Report.txt` | File path for the detailed report |
+| `-version` | - | Print version and exit |
+>>>>>>> origin/main
 
 ### Examples
 
@@ -148,13 +155,13 @@ shai-hulud-scanner -mode full -report ./ShaiHulud-Scan-Report.txt /projects/app1
 shai-hulud-scanner -files-only /workspace
 
 # Strict mode: fail on ANY finding (old behavior)
-shai-hulud-scanner -strict /path/to/project
+shai-hulud-scanner --strict /path/to/project
 
-# Warn-only mode: only fail on critical findings
-shai-hulud-scanner -warn-only /path/to/project
+# Warn-only mode: only fail on high-confidence detections
+shai-hulud-scanner --warn-only /path/to/project
 
 # Use an allowlist configuration file
-shai-hulud-scanner -config shai-hulud.config.json /path/to/project
+shai-hulud-scanner --config shai-hulud.config.json /path/to/project
 ```
 
 ---
@@ -195,7 +202,6 @@ Findings are classified into three severity levels:
 | `malicious-runner` | Critical | Confirmed malicious runner |
 | `node_modules` | High | Known compromised package |
 | `npm-cache` | High | Known compromised package |
-| `lockfile-compromised` | High | Compromised package in lockfile |
 | `file-artefact` | High | Known malicious filename |
 | `git-branch` | High | Specific Shai-Hulud IOC |
 | `git-remote` | High | Specific Shai-Hulud IOC |
@@ -207,20 +213,17 @@ Findings are classified into three severity levels:
 | `migration-attack` | Warning | May be legitimate naming |
 | `trufflehog-*` | Warning | Legitimate security tool |
 | `env-exfil-pattern` | Warning | Very high false positive rate |
-| `compromised-namespace` | Warning | Package from compromised org |
 
 ### Exit Code Behavior
 
-| Findings Present | Default | `-strict` | `-warn-only` |
-|------------------|---------|-----------|--------------|
+| Findings Present | Default | `--strict` | `--warn-only` |
+|------------------|---------|------------|---------------|
 | Critical | Exit 2 | Exit 2 | Exit 2 |
 | High | Exit 1 | Exit 1 | Exit 0 |
 | Warning only | Exit 0 | Exit 1 | Exit 0 |
 | None | Exit 0 | Exit 0 | Exit 0 |
 
 **Default behavior**: Warnings alone will NOT fail your CI pipeline. Only high-confidence detections (compromised packages, known malware files) will cause exit code 1.
-
-**Note**: The `-warn-only` flag controls exit codes based on finding severity, while `-files-only` controls what gets scanned (skipping git, npm cache, credentials). They serve different purposes and can be used together.
 
 ---
 
@@ -261,12 +264,10 @@ Create a file named `shai-hulud.config.json`:
 | `allowPaths` | Path patterns to exclude. Supports `**` for recursive matching |
 | `disableFindingTypes` | Finding types to completely disable |
 
-**Security Warning**: Be cautious when using wildcard patterns (e.g., `@cypress/*`, `@angular/*`) in `allowPackages`. These patterns will allow **any** package in that namespace, including potentially malicious packages. Only use wildcards for well-known, trusted namespaces, and consider being more specific when possible (e.g., `@cypress/react` instead of `@cypress/*`).
-
 ### Usage
 
 ```bash
-shai-hulud-scanner -config shai-hulud.config.json /path/to/project
+shai-hulud-scanner --config shai-hulud.config.json /path/to/project
 ```
 
 ### CI/CD Integration Examples
@@ -275,20 +276,20 @@ shai-hulud-scanner -config shai-hulud.config.json /path/to/project
 ```yaml
 - name: Security Scan
   run: |
-    shai-hulud-scanner -config .shai-hulud.config.json ./
+    shai-hulud-scanner --config .shai-hulud.config.json ./
 ```
 
 **GitLab CI:**
 ```yaml
 security_scan:
   script:
-    - shai-hulud-scanner -config .shai-hulud.config.json ./
+    - shai-hulud-scanner --config .shai-hulud.config.json ./
   allow_failure: false
 ```
 
 **Azure DevOps:**
 ```yaml
-- script: shai-hulud-scanner -config .shai-hulud.config.json ./
+- script: shai-hulud-scanner --config .shai-hulud.config.json ./
   displayName: 'Shai-Hulud Security Scan'
 ```
 
@@ -318,24 +319,11 @@ security_scan:
 - `b74caeaa75e077c99f7d44f46daaf9796a3be43ecf24f2a1fd381844669da777`
 - `dc67467a39b70d1cd4c1f7f7a459b35058163592f4a9e8fb4dffcbba98ef210c`
 - `4b2399646573bb737c4969563303d8ee2e9ddbd1b271f1ca9e35ea78062538db`
-- `de0e25a3e6c1e1e5998b306b7141b3dc4c0088da9d7bb47c1c00c91e6e4f85d6`
-- `81d2a004a1bca6ef87a1caf7d0e0b355ad1764238e40ff6d1b1cb77ad4f595c3`
-- `83a650ce44b2a9854802a7fb4c202877815274c129af49e6c2d1d5d5d55c501e`
-- `aba1fcbd15c6ba6d9b96e34cec287660fff4a31632bf76f2a766c499f55ca1ee`
 
 **SHA1 (Shai-Hulud 2.0):**
 - `d1829b4708126dcc7bea7437c04d1f10eacd4a16` - setup_bun.js
 - `d60ec97eea19fffb4809bc35b91033b52490ca11` - bun_environment.js
 - `3d7570d14d34b0ba137d502f042b27b0f37a59fa` - bun_environment.js variant
-
-### Compromised Namespaces
-
-The scanner flags dependencies from the following npm namespaces that have been compromised:
-
-- `@crowdstrike`, `@art-ws`, `@ngx`, `@ctrl`, `@nativescript-community`
-- `@ahmedhfarag`, `@operato`, `@teselagen`, `@things-factory`, `@hestjs`
-- `@nstudio`, `@basic-ui-components-stc`, `@nexe`, `@thangved`
-- `@tnf-dev`, `@ui-ux-gang`, `@yoobic`
 
 ## Output
 
@@ -368,7 +356,7 @@ The scanner produces:
          /project/node_modules/cypress/runner.js
 
 NOTE: Only warnings were found. Common packages like core-js, cypress, and
-      angular may trigger these. Use -strict to fail on warnings.
+      angular may trigger these. Use --strict to fail on warnings.
 ```
 
 **High-confidence detections (exits 1):**

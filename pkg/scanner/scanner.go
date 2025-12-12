@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"shai-hulud-scanner/pkg/config"
@@ -68,6 +69,7 @@ type Scanner struct {
 	compromisedScope map[string]map[string]bool // scoped packages: scope -> name -> true
 	scopes           map[string]bool
 	allowlist        *config.Allowlist
+	mu               sync.Mutex // protects report during parallel scans
 }
 
 // New creates a new Scanner with the given configuration.
@@ -94,12 +96,15 @@ func (s *Scanner) shouldSkipFinding(ft report.FindingType, indicator, location s
 }
 
 // addFinding adds a finding to the report if not excluded by allowlist.
+// This method is thread-safe for use in parallel scans.
 func (s *Scanner) addFinding(ft report.FindingType, indicator, location string) {
 	if s.shouldSkipFinding(ft, indicator, location) {
 		s.log("[*] Skipped (allowlisted): %s - %s", ft, indicator)
 		return
 	}
+	s.mu.Lock()
 	s.report.AddFinding(ft, indicator, location)
+	s.mu.Unlock()
 }
 
 // Run executes the full scan and returns the report.
@@ -141,60 +146,121 @@ func (s *Scanner) Run() (*report.Report, error) {
 		s.log("[Quick] Skipping npm cache scan (use --mode full)")
 	}
 
+	// Run parallel scans for file-based checks
+	var wg sync.WaitGroup
+
 	s.logSection("Scanning for known Shai-Hulud artifact files")
-	s.scanMaliciousFiles()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.scanMaliciousFiles()
+	}()
 
 	s.logSection("Checking for TruffleHog installation")
-	s.scanTrufflehog()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.scanTrufflehog()
+	}()
 
 	if !s.config.FilesOnly {
 		s.logSection("Scanning for suspicious git branches and remotes")
-		s.scanGit()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.scanGit()
+		}()
 
 		s.logSection("Scanning GitHub Actions workflows")
-		s.scanWorkflows()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.scanWorkflows()
+		}()
 
 		s.logSection("Checking cloud credential files")
-		s.scanCredentials()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.scanCredentials()
+		}()
+
+		s.logSection("Scanning postinstall hooks")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.scanHooks()
+		}()
+
+		s.logSection("Hash-based malware detection")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.scanHashes()
+		}()
+
+		s.logSection("Scanning lockfiles for compromised packages")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.scanLockfiles()
+		}()
+
+		s.logSection("Scanning for compromised namespaces")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.scanCompromisedNamespaces()
+		}()
 
 		if s.config.ScanMode == ScanModeFull {
 			s.logSection("Checking for self-hosted runners")
-			s.scanRunners()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				s.scanRunners()
+			}()
+
+			s.logSection("Checking for migration suffix attack")
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				s.scanMigrationSuffix()
+			}()
 		} else {
 			s.log("[Quick] Skipping self-hosted runner scan (use --mode full)")
-		}
-
-		s.logSection("Scanning postinstall hooks")
-		s.scanHooks()
-
-		s.logSection("Hash-based malware detection")
-		s.scanHashes()
-
-		if s.config.ScanMode == ScanModeFull {
-			s.logSection("Checking for migration suffix attack")
-			s.scanMigrationSuffix()
-		} else {
 			s.log("[Quick] Skipping migration suffix scan (use --mode full)")
 		}
 	}
 
 	if s.config.ScanMode == ScanModeFull {
 		s.logSection("Scanning for suspicious env+exfil patterns")
-		s.scanEnvPatterns()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.scanEnvPatterns()
+		}()
 	} else {
 		s.log("[Quick] Skipping env+exfil pattern scan (use --mode full)")
 	}
+
+	// Wait for all parallel scans to complete
+	wg.Wait()
 
 	s.report.SetDuration(time.Since(startTime))
 	return s.report, nil
 }
 
 func (s *Scanner) log(format string, args ...interface{}) {
+	s.mu.Lock()
 	fmt.Fprintf(s.config.Output, format+"\n", args...)
+	s.mu.Unlock()
 }
 
 func (s *Scanner) logSection(title string) {
+	s.mu.Lock()
 	fmt.Fprintf(s.config.Output, "\n---- %s ----\n", title)
+	s.mu.Unlock()
 }
 
 func (s *Scanner) countScopedPackages() int {
@@ -997,5 +1063,276 @@ func (s *Scanner) scanEnvPatterns() {
 
 			return nil
 		})
+	}
+}
+
+// scanCompromisedNamespaces scans package.json files for dependencies from compromised namespaces.
+func (s *Scanner) scanCompromisedNamespaces() {
+	for _, root := range s.config.RootPaths {
+		if _, err := os.Stat(root); os.IsNotExist(err) {
+			continue
+		}
+
+		filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+
+			// Skip node_modules (we scan those separately)
+			if strings.Contains(path, "node_modules") {
+				return nil
+			}
+
+			if d.Name() != "package.json" {
+				return nil
+			}
+
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+
+			contentStr := string(content)
+			for _, ns := range ioc.CompromisedNamespaces {
+				// Check if the namespace appears in the package.json
+				if strings.Contains(contentStr, "\""+ns+"/") {
+					s.addFinding(report.FindingCompromisedNS,
+						fmt.Sprintf("Package from compromised namespace: %s", ns),
+						path)
+					s.log("    [!] COMPROMISED NAMESPACE: %s in %s", ns, path)
+				}
+			}
+
+			return nil
+		})
+	}
+}
+
+// scanLockfiles scans lockfiles (package-lock.json, yarn.lock, pnpm-lock.yaml) for
+// compromised package versions.
+func (s *Scanner) scanLockfiles() {
+	for _, root := range s.config.RootPaths {
+		if _, err := os.Stat(root); os.IsNotExist(err) {
+			continue
+		}
+
+		filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+
+			// Skip node_modules
+			if strings.Contains(path, "node_modules") {
+				return nil
+			}
+
+			name := d.Name()
+			switch name {
+			case "package-lock.json":
+				s.scanPackageLockJSON(path)
+			case "yarn.lock":
+				s.scanYarnLock(path)
+			case "pnpm-lock.yaml":
+				s.scanPnpmLock(path)
+			}
+
+			return nil
+		})
+	}
+}
+
+// scanPackageLockJSON scans a package-lock.json file for compromised packages.
+func (s *Scanner) scanPackageLockJSON(lockPath string) {
+	content, err := os.ReadFile(lockPath)
+	if err != nil {
+		return
+	}
+
+	var lockfile struct {
+		Packages     map[string]json.RawMessage `json:"packages"`
+		Dependencies map[string]struct {
+			Version      string                     `json:"version"`
+			Dependencies map[string]json.RawMessage `json:"dependencies,omitempty"`
+		} `json:"dependencies"`
+	}
+
+	if err := json.Unmarshal(content, &lockfile); err != nil {
+		return
+	}
+
+	// Modern format (npm v7+): packages field
+	for pkgPath := range lockfile.Packages {
+		if pkgPath == "" {
+			continue
+		}
+		// Extract package name from path (e.g., "node_modules/@scope/name" -> "@scope/name")
+		pkgName := strings.TrimPrefix(pkgPath, "node_modules/")
+		if strings.HasPrefix(pkgName, "@") {
+			parts := strings.SplitN(pkgName, "/", 2)
+			if len(parts) == 2 {
+				scope := parts[0]
+				if s.scopes[scope] && s.compromisedScope[scope] != nil && s.compromisedScope[scope][parts[1]] {
+					s.addFinding(report.FindingLockfileCompromised,
+						fmt.Sprintf("Lockfile contains compromised package: %s", pkgName),
+						lockPath)
+					s.log("    [!] LOCKFILE: Compromised package %s in %s", pkgName, lockPath)
+				}
+			}
+		} else if s.compromisedPkgs[pkgName] {
+			s.addFinding(report.FindingLockfileCompromised,
+				fmt.Sprintf("Lockfile contains compromised package: %s", pkgName),
+				lockPath)
+			s.log("    [!] LOCKFILE: Compromised package %s in %s", pkgName, lockPath)
+		}
+	}
+
+	// Legacy format (npm v6): dependencies field
+	for pkgName := range lockfile.Dependencies {
+		if strings.HasPrefix(pkgName, "@") {
+			parts := strings.SplitN(pkgName, "/", 2)
+			if len(parts) == 2 {
+				scope := parts[0]
+				if s.scopes[scope] && s.compromisedScope[scope] != nil && s.compromisedScope[scope][parts[1]] {
+					s.addFinding(report.FindingLockfileCompromised,
+						fmt.Sprintf("Lockfile contains compromised package: %s", pkgName),
+						lockPath)
+					s.log("    [!] LOCKFILE: Compromised package %s in %s", pkgName, lockPath)
+				}
+			}
+		} else if s.compromisedPkgs[pkgName] {
+			s.addFinding(report.FindingLockfileCompromised,
+				fmt.Sprintf("Lockfile contains compromised package: %s", pkgName),
+				lockPath)
+			s.log("    [!] LOCKFILE: Compromised package %s in %s", pkgName, lockPath)
+		}
+	}
+}
+
+// scanYarnLock scans a yarn.lock file for compromised packages.
+func (s *Scanner) scanYarnLock(lockPath string) {
+	content, err := os.ReadFile(lockPath)
+	if err != nil {
+		return
+	}
+
+	// yarn.lock uses a custom format. We scan for package names at the start of lines.
+	// Format: "package-name@version:" or "@scope/name@version:"
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Check if line defines a package (ends with :)
+		if !strings.HasSuffix(line, ":") {
+			continue
+		}
+
+		// Remove quotes and trailing colon
+		line = strings.Trim(line, "\":")
+
+		// Extract package name (before @version)
+		var pkgName string
+		if strings.HasPrefix(line, "@") {
+			// Scoped package: @scope/name@version
+			parts := strings.SplitN(line, "@", 3)
+			if len(parts) >= 2 {
+				pkgName = "@" + parts[1]
+			}
+		} else {
+			// Unscoped: name@version
+			parts := strings.SplitN(line, "@", 2)
+			if len(parts) >= 1 {
+				pkgName = parts[0]
+			}
+		}
+
+		if pkgName == "" {
+			continue
+		}
+
+		if strings.HasPrefix(pkgName, "@") {
+			parts := strings.SplitN(pkgName, "/", 2)
+			if len(parts) == 2 {
+				scope := parts[0]
+				if s.scopes[scope] && s.compromisedScope[scope] != nil && s.compromisedScope[scope][parts[1]] {
+					s.addFinding(report.FindingLockfileCompromised,
+						fmt.Sprintf("Lockfile contains compromised package: %s", pkgName),
+						lockPath)
+					s.log("    [!] LOCKFILE: Compromised package %s in %s", pkgName, lockPath)
+				}
+			}
+		} else if s.compromisedPkgs[pkgName] {
+			s.addFinding(report.FindingLockfileCompromised,
+				fmt.Sprintf("Lockfile contains compromised package: %s", pkgName),
+				lockPath)
+			s.log("    [!] LOCKFILE: Compromised package %s in %s", pkgName, lockPath)
+		}
+	}
+}
+
+// scanPnpmLock scans a pnpm-lock.yaml file for compromised packages.
+func (s *Scanner) scanPnpmLock(lockPath string) {
+	content, err := os.ReadFile(lockPath)
+	if err != nil {
+		return
+	}
+
+	// pnpm-lock.yaml is YAML. We do a simple text-based scan for package names
+	// since full YAML parsing would require an external dependency.
+	// Packages appear as keys like: /@scope/name@version: or /name@version:
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Look for package entries (start with / and contain @version)
+		if !strings.HasPrefix(line, "/") {
+			continue
+		}
+
+		// Format: /@scope/name@version: or /name@version:
+		line = strings.TrimPrefix(line, "/")
+		line = strings.TrimSuffix(line, ":")
+
+		var pkgName string
+		if strings.HasPrefix(line, "@") {
+			// Scoped: @scope/name@version
+			parts := strings.SplitN(line, "@", 3)
+			if len(parts) >= 2 {
+				pkgName = "@" + parts[1]
+			}
+		} else {
+			// Unscoped: name@version
+			parts := strings.SplitN(line, "@", 2)
+			if len(parts) >= 1 {
+				pkgName = parts[0]
+			}
+		}
+
+		if pkgName == "" {
+			continue
+		}
+
+		if strings.HasPrefix(pkgName, "@") {
+			parts := strings.SplitN(pkgName, "/", 2)
+			if len(parts) == 2 {
+				scope := parts[0]
+				if s.scopes[scope] && s.compromisedScope[scope] != nil && s.compromisedScope[scope][parts[1]] {
+					s.addFinding(report.FindingLockfileCompromised,
+						fmt.Sprintf("Lockfile contains compromised package: %s", pkgName),
+						lockPath)
+					s.log("    [!] LOCKFILE: Compromised package %s in %s", pkgName, lockPath)
+				}
+			}
+		} else if s.compromisedPkgs[pkgName] {
+			s.addFinding(report.FindingLockfileCompromised,
+				fmt.Sprintf("Lockfile contains compromised package: %s", pkgName),
+				lockPath)
+			s.log("    [!] LOCKFILE: Compromised package %s in %s", pkgName, lockPath)
+		}
 	}
 }
