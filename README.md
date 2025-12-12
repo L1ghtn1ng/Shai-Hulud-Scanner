@@ -114,13 +114,16 @@ The available flags map directly to `cmd/scanner/main.go`:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-cache` | System temp dir | Directory in whch to store the compromised package cache file |
-| `-files-only` | `false` | Only scan for malicious files (skip git, npm cache, etc.) |
-| `-help` | - | Show help/usage information |
 | `-mode` | `quick` | Scan mode: `quick` or `full` |
-| `-no-banner` | `false` | Do not print the ASCII banner |
 | `-report` | `./ShaiHulud-Scan-Report.txt` | File path for the detailed report |
-| `-version` | - | Print version and exit |
+| `-cache` | system temp dir | Path for compromised package cache file |
+| `-no-banner` | `false` | Do not print the ASCII banner |
+| `-files-only` | `false` | Only scan for malicious files (skip git, npm cache, etc.) |
+| `-strict` | `false` | Exit 1 on ANY finding including warnings (old behavior) |
+| `-warn-only` | `false` | Exit 0 on warnings, only fail on high+ severity findings |
+| `-config` | - | Path to allowlist configuration file (JSON) |
+| `-help` | - | Show help/usage information |
+| `-V` | - | Print version and exit |
 
 ### Examples
 
@@ -139,6 +142,15 @@ shai-hulud-scanner -mode full -report ./ShaiHulud-Scan-Report.txt /projects/app1
 
 # Files-only scan (skip git/npm cache/credentials) for CI
 shai-hulud-scanner -files-only /workspace
+
+# Strict mode: fail on ANY finding (old behavior)
+shai-hulud-scanner -strict /path/to/project
+
+# Warn-only mode: only fail on critical findings
+shai-hulud-scanner -warn-only /path/to/project
+
+# Use an allowlist configuration file
+shai-hulud-scanner -config shai-hulud.config.json /path/to/project
 ```
 
 ---
@@ -158,6 +170,121 @@ shai-hulud-scanner -files-only /workspace
 - Deep postinstall hook analysis
 - Self-hosted runner detection
 - Environment variable exfiltration pattern detection
+
+---
+
+## Severity Levels & Exit Codes
+
+Findings are classified into three severity levels:
+
+| Severity | Exit Code | Description |
+|----------|-----------|-------------|
+| **Critical** | 2 | Confirmed malware (hash matches, malicious runners) |
+| **High** | 1 | Known compromised packages, specific IOC files/patterns |
+| **Warning** | 0 | Needs review, may be false positive |
+
+### Finding Classification
+
+| Finding Type | Severity | Rationale |
+|--------------|----------|-----------|
+| `malware-hash` | Critical | Confirmed malware signature |
+| `malicious-runner` | Critical | Confirmed malicious runner |
+| `node_modules` | High | Known compromised package |
+| `npm-cache` | High | Known compromised package |
+| `file-artefact` | High | Known malicious filename |
+| `git-branch` | High | Specific Shai-Hulud IOC |
+| `git-remote` | High | Specific Shai-Hulud IOC |
+| `workflow-pattern` | High | Specific attack pattern |
+| `workflow-content` | Warning | May be legitimate self-hosted |
+| `credential-file` | Warning | Normal to have these files |
+| `runner-installation` | Warning | May be legitimate |
+| `postinstall-hook` | Warning | High false positive rate |
+| `migration-attack` | Warning | May be legitimate naming |
+| `trufflehog-*` | Warning | Legitimate security tool |
+| `env-exfil-pattern` | Warning | Very high false positive rate |
+
+### Exit Code Behavior
+
+| Findings Present | Default | `-strict` | `-warn-only` |
+|------------------|---------|-----------|--------------|
+| Critical | Exit 2 | Exit 2 | Exit 2 |
+| High | Exit 1 | Exit 1 | Exit 0 |
+| Warning only | Exit 0 | Exit 1 | Exit 0 |
+| None | Exit 0 | Exit 0 | Exit 0 |
+
+**Default behavior**: Warnings alone will NOT fail your CI pipeline. Only high-confidence detections (compromised packages, known malware files) will cause exit code 1.
+
+**Note**: The `-warn-only` flag controls exit codes based on finding severity, while `-files-only` controls what gets scanned (skipping git, npm cache, credentials). They serve different purposes and can be used together.
+
+---
+
+## Allowlist Configuration
+
+You can create a JSON configuration file to exclude known-good packages, paths, or finding types.
+
+### Configuration File Format
+
+Create a file named `shai-hulud.config.json`:
+
+```json
+{
+  "allowPackages": [
+    "core-js",
+    "@cypress/*",
+    "@angular/*",
+    "@babel/*"
+  ],
+  "allowPaths": [
+    "**/node_modules/cypress/**",
+    "**/node_modules/core-js/**",
+    "**/test/**"
+  ],
+  "disableFindingTypes": [
+    "credential-file",
+    "env-exfil-pattern",
+    "postinstall-hook"
+  ]
+}
+```
+
+### Configuration Options
+
+| Option | Description |
+|--------|-------------|
+| `allowPackages` | Package names to exclude. Supports glob patterns like `@scope/*` |
+| `allowPaths` | Path patterns to exclude. Supports `**` for recursive matching |
+| `disableFindingTypes` | Finding types to completely disable |
+
+**Security Warning**: Be cautious when using wildcard patterns (e.g., `@cypress/*`, `@angular/*`) in `allowPackages`. These patterns will allow **any** package in that namespace, including potentially malicious packages. Only use wildcards for well-known, trusted namespaces, and consider being more specific when possible (e.g., `@cypress/react` instead of `@cypress/*`).
+
+### Usage
+
+```bash
+shai-hulud-scanner -config shai-hulud.config.json /path/to/project
+```
+
+### CI/CD Integration Examples
+
+**GitHub Actions:**
+```yaml
+- name: Security Scan
+  run: |
+    shai-hulud-scanner -config .shai-hulud.config.json ./
+```
+
+**GitLab CI:**
+```yaml
+security_scan:
+  script:
+    - shai-hulud-scanner -config .shai-hulud.config.json ./
+  allow_failure: false
+```
+
+**Azure DevOps:**
+```yaml
+- script: shai-hulud-scanner -config .shai-hulud.config.json ./
+  displayName: 'Shai-Hulud Security Scan'
+```
 
 ## Detected IOCs
 
@@ -195,25 +322,64 @@ shai-hulud-scanner -files-only /workspace
 
 The scanner produces:
 
-1. **Console output** - Real-time progress and findings
+1. **Console output** - Real-time progress and findings grouped by severity
 2. **Report file** - Detailed findings written to the report path
 
 ### Example Output
 
+**Clean scan (no findings):**
 ```
+---- Scan Results ----
+[*] Scan completed in 5s (QUICK mode)
+
 [OK] No indicators of Shai-Hulud compromise were found in the scanned locations.
 ```
 
-Or if issues are found:
-
+**Warnings only (exits 0 by default):**
 ```
-[!!!] POTENTIAL INDICATORS OF COMPROMISE FOUND: 3 item(s)
+---- Scan Results ----
+[*] Scan completed in 5s (QUICK mode)
 
-Type              Package/Indicator                    Location
-----              -----------------                    --------
-node_modules      @example/malicious-pkg               C:\Projects\app\node_modules\...
-workflow-content  Workflow contains: self-hosted       C:\Projects\app\.github\workflows\ci.yml
-malware-hash      SHA256 match: Shai-Hulud bundle.js   C:\Projects\app\dist\bundle.js
+[!] WARNINGS: 3 (review recommended, may be false positives)
+  [postinstall-hook] Suspicious postinstall: node -e
+         /project/node_modules/core-js/package.json
+  [credential-file] .env file
+         /project/.env
+  [env-exfil-pattern] Env access + exfil pattern
+         /project/node_modules/cypress/runner.js
+
+NOTE: Only warnings were found. Common packages like core-js, cypress, and
+      angular may trigger these. Use -strict to fail on warnings.
+```
+
+**High-confidence detections (exits 1):**
+```
+---- Scan Results ----
+[*] Scan completed in 5s (QUICK mode)
+
+[!!] HIGH CONFIDENCE DETECTIONS: 2 (requires action)
+  [node_modules] @example/malicious-pkg
+         /project/node_modules/@example/malicious-pkg
+  [file-artefact] shai-hulud.js
+         /project/.github/workflows/shai-hulud.js
+
+[!] WARNINGS: 1 (review recommended, may be false positives)
+  [credential-file] .env file
+         /project/.env
+```
+
+**Critical findings (exits 2):**
+```
+---- Scan Results ----
+[*] Scan completed in 5s (FULL mode)
+
+[!!!] CRITICAL FINDINGS: 1 (confirmed malware)
+  [malware-hash] SHA256 match: Shai-Hulud bundle.js payload
+         /project/dist/bundle.js
+
+[!!] HIGH CONFIDENCE DETECTIONS: 1 (requires action)
+  [node_modules] malicious-package
+         /project/node_modules/malicious-package
 ```
 
 ## References

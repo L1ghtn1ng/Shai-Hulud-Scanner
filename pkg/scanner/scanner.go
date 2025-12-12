@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"shai-hulud-scanner/pkg/config"
 	"shai-hulud-scanner/pkg/hash"
 	"shai-hulud-scanner/pkg/ioc"
 	"shai-hulud-scanner/pkg/report"
@@ -37,6 +38,12 @@ type Config struct {
 	FilesOnly  bool
 	CacheFile  string
 	Output     io.Writer
+	// Strict mode: exit 1 on ANY finding (including warnings)
+	Strict bool
+	// WarnOnly mode: exit 0 on warnings, only exit 1 on high+ severity
+	WarnOnly bool
+	// Allowlist configuration for excluding findings
+	Allowlist *config.Allowlist
 }
 
 // DefaultConfig returns a default scanner configuration.
@@ -60,6 +67,7 @@ type Scanner struct {
 	compromisedPkgs  map[string]bool            // unscoped packages
 	compromisedScope map[string]map[string]bool // scoped packages: scope -> name -> true
 	scopes           map[string]bool
+	allowlist        *config.Allowlist
 }
 
 // New creates a new Scanner with the given configuration.
@@ -73,7 +81,25 @@ func New(cfg *Config) *Scanner {
 		compromisedPkgs:  make(map[string]bool),
 		compromisedScope: make(map[string]map[string]bool),
 		scopes:           make(map[string]bool),
+		allowlist:        cfg.Allowlist,
 	}
+}
+
+// shouldSkipFinding checks if a finding should be skipped based on the allowlist.
+func (s *Scanner) shouldSkipFinding(ft report.FindingType, indicator, location string) bool {
+	if s.allowlist == nil {
+		return false
+	}
+	return s.allowlist.ShouldSkipFinding(ft, indicator, location)
+}
+
+// addFinding adds a finding to the report if not excluded by allowlist.
+func (s *Scanner) addFinding(ft report.FindingType, indicator, location string) {
+	if s.shouldSkipFinding(ft, indicator, location) {
+		s.log("[*] Skipped (allowlisted): %s - %s", ft, indicator)
+		return
+	}
+	s.report.AddFinding(ft, indicator, location)
 }
 
 // Run executes the full scan and returns the report.
@@ -396,14 +422,14 @@ func (s *Scanner) scanNodeModules(nmDirs []string) {
 					pkgName := subEntry.Name()
 					if s.compromisedScope[name] != nil && s.compromisedScope[name][pkgName] {
 						fullName := name + "/" + pkgName
-						s.report.AddFinding(report.FindingNodeModules, fullName, filepath.Join(childPath, pkgName))
+						s.addFinding(report.FindingNodeModules, fullName, filepath.Join(childPath, pkgName))
 						s.log("    [!] FOUND: %s at %s", fullName, nm)
 					}
 				}
 			} else {
 				// Unscoped package
 				if s.compromisedPkgs[name] {
-					s.report.AddFinding(report.FindingNodeModules, name, childPath)
+					s.addFinding(report.FindingNodeModules, name, childPath)
 					s.log("    [!] FOUND: %s at %s", name, nm)
 				}
 			}
@@ -452,7 +478,7 @@ func (s *Scanner) scanNpmCache(cachePath string) {
 		name := d.Name()
 		// Check unscoped
 		if s.compromisedPkgs[name] {
-			s.report.AddFinding(report.FindingNpmCache, name, path)
+			s.addFinding(report.FindingNpmCache, name, path)
 			s.log("    [!] FOUND in cache: %s", name)
 			return filepath.SkipDir
 		}
@@ -463,7 +489,7 @@ func (s *Scanner) scanNpmCache(cachePath string) {
 			for _, sub := range subEntries {
 				if sub.IsDir() && s.compromisedScope[name] != nil && s.compromisedScope[name][sub.Name()] {
 					fullName := name + "/" + sub.Name()
-					s.report.AddFinding(report.FindingNpmCache, fullName, filepath.Join(path, sub.Name()))
+					s.addFinding(report.FindingNpmCache, fullName, filepath.Join(path, sub.Name()))
 					s.log("    [!] FOUND in cache: %s", fullName)
 				}
 			}
@@ -483,13 +509,13 @@ func (s *Scanner) scanMaliciousFiles() {
 			for _, fname := range ioc.MaliciousFileNames {
 				fpath := filepath.Join(root, fname)
 				if _, err := os.Stat(fpath); err == nil {
-					s.report.AddFinding(report.FindingFileArtefact, fname, fpath)
+					s.addFinding(report.FindingFileArtefact, fname, fpath)
 					s.log("    [!] FOUND: %s at %s", fname, root)
 				}
 
 				wfPath := filepath.Join(root, ".github", "workflows", fname)
 				if _, err := os.Stat(wfPath); err == nil {
-					s.report.AddFinding(report.FindingFileArtefact, fname, wfPath)
+					s.addFinding(report.FindingFileArtefact, fname, wfPath)
 					s.log("    [!] FOUND: %s at %s", fname, filepath.Join(root, ".github", "workflows"))
 				}
 			}
@@ -505,7 +531,7 @@ func (s *Scanner) scanMaliciousFiles() {
 					return nil
 				}
 				if malNames[d.Name()] {
-					s.report.AddFinding(report.FindingFileArtefact, d.Name(), path)
+					s.addFinding(report.FindingFileArtefact, d.Name(), path)
 					s.log("    [!] FOUND: %s at %s", d.Name(), filepath.Dir(path))
 				}
 				return nil
@@ -573,7 +599,7 @@ func (s *Scanner) checkGitRepo(repoDir string) {
 			branch := strings.TrimSpace(line)
 			branch = strings.TrimPrefix(branch, "* ")
 			if ioc.ContainsSuspiciousBranchPattern(branch) {
-				s.report.AddFinding(report.FindingGitBranch, "Branch: "+branch, repoDir)
+				s.addFinding(report.FindingGitBranch, "Branch: "+branch, repoDir)
 			}
 		}
 	}
@@ -584,7 +610,7 @@ func (s *Scanner) checkGitRepo(repoDir string) {
 	if err == nil {
 		remotes := string(output)
 		if strings.Contains(strings.ToLower(remotes), "shai-hulud") {
-			s.report.AddFinding(report.FindingGitRemote, "Remote contains 'Shai-Hulud'", repoDir)
+			s.addFinding(report.FindingGitRemote, "Remote contains 'Shai-Hulud'", repoDir)
 		}
 	}
 }
@@ -617,7 +643,7 @@ func (s *Scanner) scanWorkflows() {
 
 					// Check for suspicious workflow name patterns
 					if formatterRegex.MatchString(name) {
-						s.report.AddFinding(report.FindingWorkflowPattern, "Suspicious workflow name: "+name, wfPath)
+						s.addFinding(report.FindingWorkflowPattern, "Suspicious workflow name: "+name, wfPath)
 						s.log("    [!] SUSPICIOUS workflow: %s", wfPath)
 					}
 
@@ -627,7 +653,7 @@ func (s *Scanner) scanWorkflows() {
 						continue
 					}
 					if pattern, found := ioc.ContainsSuspiciousWorkflowPattern(string(content)); found {
-						s.report.AddFinding(report.FindingWorkflowContent, "Workflow contains: "+pattern, wfPath)
+						s.addFinding(report.FindingWorkflowContent, "Workflow contains: "+pattern, wfPath)
 					}
 				}
 				return filepath.SkipDir
@@ -646,7 +672,7 @@ func (s *Scanner) scanCredentials() {
 		for _, credPath := range ioc.CloudCredentialPaths {
 			fullPath := filepath.Join(root, credPath)
 			if _, err := os.Stat(fullPath); err == nil {
-				s.report.AddFinding(report.FindingCredentialFile, credPath, fullPath)
+				s.addFinding(report.FindingCredentialFile, credPath, fullPath)
 			}
 		}
 
@@ -661,7 +687,7 @@ func (s *Scanner) scanCredentials() {
 					return nil
 				}
 				if strings.HasPrefix(d.Name(), ".env") {
-					s.report.AddFinding(report.FindingCredentialFile, ".env file", path)
+					s.addFinding(report.FindingCredentialFile, ".env file", path)
 				}
 				return nil
 			})
@@ -669,7 +695,7 @@ func (s *Scanner) scanCredentials() {
 			// Quick mode: just check root .env
 			envPath := filepath.Join(root, ".env")
 			if _, err := os.Stat(envPath); err == nil {
-				s.report.AddFinding(report.FindingCredentialFile, ".env file", envPath)
+				s.addFinding(report.FindingCredentialFile, ".env file", envPath)
 			}
 		}
 	}
@@ -703,10 +729,10 @@ func (s *Scanner) scanRunners() {
 			if _, err := os.Stat(runnerFile); err == nil {
 				content, err := os.ReadFile(runnerFile)
 				if err == nil && strings.Contains(string(content), "SHA1HULUD") {
-					s.report.AddFinding(report.FindingMaliciousRunner, "Malicious self-hosted runner 'SHA1HULUD'", path)
+					s.addFinding(report.FindingMaliciousRunner, "Malicious self-hosted runner 'SHA1HULUD'", path)
 					s.log("    [!] CRITICAL: Malicious runner at %s", path)
 				} else {
-					s.report.AddFinding(report.FindingRunnerInstallation, "Self-hosted runner installation (verify legitimacy)", path)
+					s.addFinding(report.FindingRunnerInstallation, "Self-hosted runner installation (verify legitimacy)", path)
 				}
 			}
 
@@ -767,7 +793,7 @@ func (s *Scanner) checkPackageJson(pkgPath string) {
 			continue
 		}
 		if pattern, found := ioc.ContainsSuspiciousHookPattern(script); found {
-			s.report.AddFinding(report.FindingPostinstallHook, fmt.Sprintf("Suspicious %s: %s", hookName, pattern), pkgPath)
+			s.addFinding(report.FindingPostinstallHook, fmt.Sprintf("Suspicious %s: %s", hookName, pattern), pkgPath)
 		}
 	}
 }
@@ -828,13 +854,13 @@ func (s *Scanner) checkFileHash(filePath string) {
 	}
 
 	if desc, found := ioc.IsMaliciousSHA256(sha256Hash); found {
-		s.report.AddFinding(report.FindingMalwareHash, "SHA256 match: "+desc, filePath)
+		s.addFinding(report.FindingMalwareHash, "SHA256 match: "+desc, filePath)
 		s.log("    [!!!] MALWARE DETECTED: %s", filePath)
 		return
 	}
 
 	if desc, found := ioc.IsMaliciousSHA1(sha1Hash); found {
-		s.report.AddFinding(report.FindingMalwareHash, "SHA1 match: "+desc, filePath)
+		s.addFinding(report.FindingMalwareHash, "SHA1 match: "+desc, filePath)
 		s.log("    [!!!] MALWARE DETECTED: %s", filePath)
 	}
 }
@@ -852,7 +878,7 @@ func (s *Scanner) scanMigrationSuffix() {
 
 			// Check for -migration directories
 			if strings.HasSuffix(d.Name(), "-migration") {
-				s.report.AddFinding(report.FindingMigrationAttack, "Directory ends with -migration", path)
+				s.addFinding(report.FindingMigrationAttack, "Directory ends with -migration", path)
 			}
 
 			// Check git remotes for -migration
@@ -861,7 +887,7 @@ func (s *Scanner) scanMigrationSuffix() {
 				cmd := exec.Command("git", "-C", repoDir, "remote", "-v")
 				output, err := cmd.Output()
 				if err == nil && strings.Contains(strings.ToLower(string(output)), "-migration") {
-					s.report.AddFinding(report.FindingMigrationAttack, "Remote URL contains '-migration'", repoDir)
+					s.addFinding(report.FindingMigrationAttack, "Remote URL contains '-migration'", repoDir)
 				}
 				return filepath.SkipDir
 			}
@@ -874,7 +900,7 @@ func (s *Scanner) scanMigrationSuffix() {
 func (s *Scanner) scanTrufflehog() {
 	// Check if trufflehog is in PATH
 	if path, err := exec.LookPath("trufflehog"); err == nil {
-		s.report.AddFinding(report.FindingTrufflehog, "TruffleHog in PATH", path)
+		s.addFinding(report.FindingTrufflehog, "TruffleHog in PATH", path)
 	}
 
 	if s.config.ScanMode == ScanModeFull {
@@ -891,14 +917,14 @@ func (s *Scanner) scanTrufflehog() {
 				name := d.Name()
 				// Check for trufflehog binary
 				if name == "trufflehog" || name == "trufflehog.exe" {
-					s.report.AddFinding(report.FindingTrufflehog, "TruffleHog binary", path)
+					s.addFinding(report.FindingTrufflehog, "TruffleHog binary", path)
 				}
 
 				// Check package.json for trufflehog references
 				if name == "package.json" && !strings.Contains(path, "node_modules"+string(filepath.Separator)+"node_modules") {
 					content, err := os.ReadFile(path)
 					if err == nil && strings.Contains(strings.ToLower(string(content)), "trufflehog") {
-						s.report.AddFinding(report.FindingTrufflehogRef, "package.json references trufflehog", path)
+						s.addFinding(report.FindingTrufflehogRef, "package.json references trufflehog", path)
 					}
 				}
 
@@ -965,7 +991,7 @@ func (s *Scanner) scanEnvPatterns() {
 			}
 
 			if hasEnvAccess && hasExfil {
-				s.report.AddFinding(report.FindingEnvExfil, "Env access + exfil pattern", path)
+				s.addFinding(report.FindingEnvExfil, "Env access + exfil pattern", path)
 				s.log("    [!] SUSPICIOUS env+exfil: %s", path)
 			}
 

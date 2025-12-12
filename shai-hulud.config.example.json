@@ -1,0 +1,20 @@
+{
+  "allowPackages": [
+    "core-js",
+    "@cypress/*",
+    "@angular/*",
+    "@babel/*",
+    "@types/*"
+  ],
+  "allowPaths": [
+    "**/node_modules/cypress/**",
+    "**/node_modules/core-js/**",
+    "**/test/**",
+    "**/__tests__/**"
+  ],
+  "disableFindingTypes": [
+    "credential-file",
+    "env-exfil-pattern",
+    "postinstall-hook"
+  ]
+}
