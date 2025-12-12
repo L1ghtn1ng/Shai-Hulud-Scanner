@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"shai-hulud-scanner/pkg/config"
 	"shai-hulud-scanner/pkg/scanner"
 )
 
-const version = "1.0.3"
+const version = "1.1.0"
 
 const defaultReportName = "ShaiHulud-Scan-Report.txt"
 
@@ -39,11 +40,24 @@ func printUsage() {
 	fmt.Println("Options:")
 	flag.PrintDefaults()
 	fmt.Println()
+	fmt.Println("Exit Codes:")
+	fmt.Println("  0 - No findings, or only warnings (default behavior)")
+	fmt.Println("  1 - High-confidence detections found (known bad packages, IOCs)")
+	fmt.Println("  2 - Critical findings (confirmed malware)")
+	fmt.Println()
+	fmt.Println("Severity Levels:")
+	fmt.Println("  critical - Confirmed malware (hash matches, malicious runners)")
+	fmt.Println("  high     - Known compromised packages, specific IOC files/patterns")
+	fmt.Println("  warning  - Needs review, may be false positive (env patterns, hooks)")
+	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  shai-hulud-scanner                          # Quick scan of home directory")
 	fmt.Println("  shai-hulud-scanner -mode full               # Full scan of home directory")
 	fmt.Println("  shai-hulud-scanner /path/to/project         # Quick scan of specific path")
 	fmt.Println("  shai-hulud-scanner -mode full -report scan.txt /projects")
+	fmt.Println("  shai-hulud-scanner --strict /path           # Fail on any finding (old behavior)")
+	fmt.Println("  shai-hulud-scanner --warn-only /path        # Only fail on high+ severity")
+	fmt.Println("  shai-hulud-scanner --config allowlist.json  # Use allowlist configuration")
 	fmt.Println()
 }
 
@@ -55,6 +69,9 @@ func main() {
 		cachePath  = flag.String("cache", "", "Path or directory for compromised package cache file (default: system temp dir)")
 		noBanner   = flag.Bool("no-banner", false, "Do not print the banner")
 		filesOnly  = flag.Bool("files-only", false, "Only scan for malicious files (skip git, npm cache, etc.)")
+		strict     = flag.Bool("strict", false, "Strict mode: exit 1 on ANY finding including warnings (old behavior)")
+		warnOnly   = flag.Bool("warn-only", false, "Warn-only mode: exit 0 on warnings, only fail on high+ severity findings")
+		configPath = flag.String("config", "", "Path to allowlist configuration file (JSON)")
 		showHelp   = flag.Bool("help", false, "Show help message")
 		showVer    = flag.Bool("V", false, "Show version")
 	)
@@ -123,6 +140,20 @@ func main() {
 		fmt.Println()
 	}
 
+	// Load allowlist configuration if specified
+	var allowlist *config.Allowlist
+	if *configPath != "" {
+		var err error
+		allowlist, err = config.LoadAllowlist(*configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading config file: %v\n", err)
+			os.Exit(1)
+		}
+		if !*noBanner {
+			fmt.Printf("[*] Loaded allowlist configuration from: %s\n", *configPath)
+		}
+	}
+
 	// Create a scanner configuration, starting from defaults so that
 	// features like feed caching are consistently enabled.
 	cfg := scanner.DefaultConfig()
@@ -131,6 +162,9 @@ func main() {
 	cfg.ReportPath = resolvedReportPath
 	cfg.NoBanner = *noBanner
 	cfg.FilesOnly = *filesOnly
+	cfg.Strict = *strict
+	cfg.WarnOnly = *warnOnly
+	cfg.Allowlist = allowlist
 	if *cachePath != "" {
 		resolvedCachePath := *cachePath
 		if info, err := os.Stat(resolvedCachePath); err == nil && info.IsDir() {
@@ -164,11 +198,25 @@ func main() {
 	fmt.Println("============================================")
 	fmt.Println()
 
-	// Exit with error code if critical findings
+	// Exit code logic based on severity and mode flags
+	// Critical findings always exit 2 (confirmed malware)
 	if rpt.IsCritical() {
 		os.Exit(2)
 	}
-	if rpt.HasFindings() {
+
+	// If strict mode: exit 1 on ANY finding (old behavior)
+	if *strict && rpt.HasFindings() {
 		os.Exit(1)
 	}
+
+	// Default behavior: exit 1 only on high-severity findings
+	// Warnings alone = exit 0
+	if rpt.HasHighSeverity() {
+		// Unless warn-only mode is set, which ignores high severity too
+		if !*warnOnly {
+			os.Exit(1)
+		}
+	}
+
+	// Exit 0 for clean scan or warnings-only (default behavior)
 }

@@ -31,9 +31,47 @@ const (
 	FindingEnvExfil           FindingType = "env-exfil-pattern"
 )
 
+// FindingSeverity represents the severity level of a finding.
+type FindingSeverity string
+
+const (
+	SeverityCritical FindingSeverity = "critical" // Confirmed malware (hash match, malicious runner)
+	SeverityHigh     FindingSeverity = "high"     // Known bad package/file, specific IOCs
+	SeverityWarning  FindingSeverity = "warning"  // Needs review, may be false positive
+)
+
+// findingSeverityMap maps finding types to their default severity levels.
+var findingSeverityMap = map[FindingType]FindingSeverity{
+	FindingMalwareHash:        SeverityCritical,
+	FindingMaliciousRunner:    SeverityCritical,
+	FindingNodeModules:        SeverityHigh,
+	FindingNpmCache:           SeverityHigh,
+	FindingFileArtefact:       SeverityHigh,
+	FindingGitBranch:          SeverityHigh,
+	FindingGitRemote:          SeverityHigh,
+	FindingWorkflowPattern:    SeverityHigh,
+	FindingWorkflowContent:    SeverityWarning,
+	FindingCredentialFile:     SeverityWarning,
+	FindingRunnerInstallation: SeverityWarning,
+	FindingPostinstallHook:    SeverityWarning,
+	FindingMigrationAttack:    SeverityWarning,
+	FindingTrufflehog:         SeverityWarning,
+	FindingTrufflehogRef:      SeverityWarning,
+	FindingEnvExfil:           SeverityWarning,
+}
+
+// GetDefaultSeverity returns the default severity for a finding type.
+func GetDefaultSeverity(ft FindingType) FindingSeverity {
+	if sev, ok := findingSeverityMap[ft]; ok {
+		return sev
+	}
+	return SeverityWarning
+}
+
 // Finding represents a single detection finding.
 type Finding struct {
 	Type      FindingType
+	Severity  FindingSeverity
 	Indicator string
 	Location  string
 }
@@ -63,10 +101,21 @@ func NewReport(scanMode string, pathsScanned []string) *Report {
 	}
 }
 
-// AddFinding adds a finding to the report.
+// AddFinding adds a finding to the report with default severity.
 func (r *Report) AddFinding(findingType FindingType, indicator, location string) {
 	r.Findings = append(r.Findings, Finding{
 		Type:      findingType,
+		Severity:  GetDefaultSeverity(findingType),
+		Indicator: indicator,
+		Location:  location,
+	})
+}
+
+// AddFindingWithSeverity adds a finding with a specific severity override.
+func (r *Report) AddFindingWithSeverity(findingType FindingType, severity FindingSeverity, indicator, location string) {
+	r.Findings = append(r.Findings, Finding{
+		Type:      findingType,
+		Severity:  severity,
 		Indicator: indicator,
 		Location:  location,
 	})
@@ -119,10 +168,32 @@ func (r *Report) Write(w io.Writer) error {
 	if !r.HasFindings() {
 		sb.WriteString("No indicators of compromise found in scanned locations.\n")
 	} else {
-		sb.WriteString(fmt.Sprintf("Indicators of compromise detected: %d\n", r.FindingCount()))
+		critical, high, warning := r.CountBySeverity()
+		sb.WriteString(fmt.Sprintf("Findings Summary: %d critical, %d high, %d warnings\n", critical, high, warning))
 		sb.WriteString("\n")
-		for _, f := range r.Findings {
-			sb.WriteString(fmt.Sprintf("Type: %s | Indicator: %s | Location: %s\n", f.Type, f.Indicator, f.Location))
+
+		if critical > 0 {
+			sb.WriteString("=== CRITICAL FINDINGS (confirmed malware) ===\n")
+			for _, f := range r.GetFindingsBySeverity(SeverityCritical) {
+				sb.WriteString(fmt.Sprintf("Type: %s | Indicator: %s | Location: %s\n", f.Type, f.Indicator, f.Location))
+			}
+			sb.WriteString("\n")
+		}
+
+		if high > 0 {
+			sb.WriteString("=== HIGH CONFIDENCE DETECTIONS (requires action) ===\n")
+			for _, f := range r.GetFindingsBySeverity(SeverityHigh) {
+				sb.WriteString(fmt.Sprintf("Type: %s | Indicator: %s | Location: %s\n", f.Type, f.Indicator, f.Location))
+			}
+			sb.WriteString("\n")
+		}
+
+		if warning > 0 {
+			sb.WriteString("=== WARNINGS (review recommended, may be false positives) ===\n")
+			for _, f := range r.GetFindingsBySeverity(SeverityWarning) {
+				sb.WriteString(fmt.Sprintf("Type: %s | Indicator: %s | Location: %s\n", f.Type, f.Indicator, f.Location))
+			}
+			sb.WriteString("\n")
 		}
 	}
 
@@ -130,19 +201,54 @@ func (r *Report) Write(w io.Writer) error {
 	return err
 }
 
-// PrintSummary prints a summary of the findings to stdout.
+// PrintSummary prints a summary of the findings to stdout, grouped by severity.
 func (r *Report) PrintSummary(w io.Writer) {
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "---- Summary ----")
+	fmt.Fprintln(w, "---- Scan Results ----")
 	fmt.Fprintf(w, "[*] Scan completed in %s (%s mode)\n", r.Duration.Round(time.Second), strings.ToUpper(r.ScanMode))
+	fmt.Fprintln(w)
 
 	if !r.HasFindings() {
 		fmt.Fprintln(w, "[OK] No indicators of Shai-Hulud compromise were found in the scanned locations.")
-	} else {
-		fmt.Fprintf(w, "[!!!] POTENTIAL INDICATORS OF COMPROMISE FOUND: %d item(s)\n", r.FindingCount())
-		for _, f := range r.Findings {
-			fmt.Fprintln(w, f.String())
+		return
+	}
+
+	critical, high, warning := r.CountBySeverity()
+
+	// Critical findings
+	if critical > 0 {
+		fmt.Fprintf(w, "[!!!] CRITICAL FINDINGS: %d (confirmed malware)\n", critical)
+		for _, f := range r.GetFindingsBySeverity(SeverityCritical) {
+			fmt.Fprintf(w, "  [%s] %s\n", f.Type, f.Indicator)
+			fmt.Fprintf(w, "         %s\n", f.Location)
 		}
+		fmt.Fprintln(w)
+	}
+
+	// High severity findings
+	if high > 0 {
+		fmt.Fprintf(w, "[!!] HIGH CONFIDENCE DETECTIONS: %d (requires action)\n", high)
+		for _, f := range r.GetFindingsBySeverity(SeverityHigh) {
+			fmt.Fprintf(w, "  [%s] %s\n", f.Type, f.Indicator)
+			fmt.Fprintf(w, "         %s\n", f.Location)
+		}
+		fmt.Fprintln(w)
+	}
+
+	// Warning findings
+	if warning > 0 {
+		fmt.Fprintf(w, "[!] WARNINGS: %d (review recommended, may be false positives)\n", warning)
+		for _, f := range r.GetFindingsBySeverity(SeverityWarning) {
+			fmt.Fprintf(w, "  [%s] %s\n", f.Type, f.Indicator)
+			fmt.Fprintf(w, "         %s\n", f.Location)
+		}
+		fmt.Fprintln(w)
+	}
+
+	// Print helpful note if only warnings
+	if critical == 0 && high == 0 && warning > 0 {
+		fmt.Fprintln(w, "NOTE: Only warnings were found. Common packages like core-js, cypress, and")
+		fmt.Fprintln(w, "      angular may trigger these. Use --strict to fail on warnings.")
 	}
 }
 
@@ -157,12 +263,58 @@ func (r *Report) GetFindingsByType(t FindingType) []Finding {
 	return result
 }
 
-// IsCritical returns true if any critical findings (malware hash, malicious runner) were detected.
+// IsCritical returns true if any critical severity findings were detected.
 func (r *Report) IsCritical() bool {
 	for _, f := range r.Findings {
-		if f.Type == FindingMalwareHash || f.Type == FindingMaliciousRunner {
+		if f.Severity == SeverityCritical {
 			return true
 		}
 	}
 	return false
+}
+
+// HasHighSeverity returns true if any high severity findings were detected.
+func (r *Report) HasHighSeverity() bool {
+	for _, f := range r.Findings {
+		if f.Severity == SeverityHigh {
+			return true
+		}
+	}
+	return false
+}
+
+// HasWarnings returns true if any warning severity findings were detected.
+func (r *Report) HasWarnings() bool {
+	for _, f := range r.Findings {
+		if f.Severity == SeverityWarning {
+			return true
+		}
+	}
+	return false
+}
+
+// GetFindingsBySeverity returns all findings of a specific severity.
+func (r *Report) GetFindingsBySeverity(sev FindingSeverity) []Finding {
+	var result []Finding
+	for _, f := range r.Findings {
+		if f.Severity == sev {
+			result = append(result, f)
+		}
+	}
+	return result
+}
+
+// CountBySeverity returns the count of findings for each severity level.
+func (r *Report) CountBySeverity() (critical, high, warning int) {
+	for _, f := range r.Findings {
+		switch f.Severity {
+		case SeverityCritical:
+			critical++
+		case SeverityHigh:
+			high++
+		case SeverityWarning:
+			warning++
+		}
+	}
+	return
 }

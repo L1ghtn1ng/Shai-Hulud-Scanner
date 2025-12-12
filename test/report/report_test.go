@@ -169,7 +169,8 @@ func TestWrite(t *testing.T) {
 		"Scan Mode: QUICK",
 		"Paths Scanned: /home/user",
 		"Compromised packages loaded: 100",
-		"Indicators of compromise detected: 1",
+		"Findings Summary:",
+		"HIGH CONFIDENCE DETECTIONS",
 		"node_modules",
 		"evil-pkg",
 	}
@@ -238,10 +239,10 @@ func TestPrintSummary(t *testing.T) {
 	output := buf.String()
 
 	expectedStrings := []string{
-		"Summary",
+		"Scan Results",
 		"Scan completed",
 		"QUICK",
-		"POTENTIAL INDICATORS OF COMPROMISE FOUND: 1",
+		"CRITICAL FINDINGS: 1",
 	}
 
 	for _, expected := range expectedStrings {
@@ -266,6 +267,7 @@ func TestPrintSummary_NoFindings(t *testing.T) {
 func TestFindingString(t *testing.T) {
 	f := report.Finding{
 		Type:      report.FindingMalwareHash,
+		Severity:  report.SeverityCritical,
 		Indicator: "SHA256 match: test malware",
 		Location:  "/home/user/malware.js",
 	}
@@ -307,5 +309,110 @@ func TestFindingTypes(t *testing.T) {
 		if string(ft) == "" {
 			t.Errorf("FindingType %v has empty string representation", ft)
 		}
+	}
+}
+
+func TestSeverityClassification(t *testing.T) {
+	tests := []struct {
+		findingType    report.FindingType
+		expectedSev    report.FindingSeverity
+	}{
+		{report.FindingMalwareHash, report.SeverityCritical},
+		{report.FindingMaliciousRunner, report.SeverityCritical},
+		{report.FindingNodeModules, report.SeverityHigh},
+		{report.FindingNpmCache, report.SeverityHigh},
+		{report.FindingFileArtefact, report.SeverityHigh},
+		{report.FindingGitBranch, report.SeverityHigh},
+		{report.FindingCredentialFile, report.SeverityWarning},
+		{report.FindingPostinstallHook, report.SeverityWarning},
+		{report.FindingEnvExfil, report.SeverityWarning},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.findingType), func(t *testing.T) {
+			sev := report.GetDefaultSeverity(tt.findingType)
+			if sev != tt.expectedSev {
+				t.Errorf("GetDefaultSeverity(%s) = %v, want %v", tt.findingType, sev, tt.expectedSev)
+			}
+		})
+	}
+}
+
+func TestHasHighSeverity(t *testing.T) {
+	r := report.NewReport("quick", []string{"/home"})
+
+	// No findings
+	if r.HasHighSeverity() {
+		t.Error("HasHighSeverity() should return false for empty report")
+	}
+
+	// Add warning-level finding
+	r.AddFinding(report.FindingCredentialFile, ".env", "/path/.env")
+	if r.HasHighSeverity() {
+		t.Error("HasHighSeverity() should return false for warning-only report")
+	}
+
+	// Add high-level finding
+	r.AddFinding(report.FindingNodeModules, "bad-pkg", "/path/node_modules/bad-pkg")
+	if !r.HasHighSeverity() {
+		t.Error("HasHighSeverity() should return true when high-severity finding exists")
+	}
+}
+
+func TestHasWarnings(t *testing.T) {
+	r := report.NewReport("quick", []string{"/home"})
+
+	if r.HasWarnings() {
+		t.Error("HasWarnings() should return false for empty report")
+	}
+
+	r.AddFinding(report.FindingCredentialFile, ".env", "/path/.env")
+	if !r.HasWarnings() {
+		t.Error("HasWarnings() should return true when warning finding exists")
+	}
+}
+
+func TestCountBySeverity(t *testing.T) {
+	r := report.NewReport("quick", []string{"/home"})
+
+	r.AddFinding(report.FindingMalwareHash, "hash", "/path/malware.js")
+	r.AddFinding(report.FindingNodeModules, "pkg1", "/path1")
+	r.AddFinding(report.FindingNodeModules, "pkg2", "/path2")
+	r.AddFinding(report.FindingCredentialFile, ".env", "/path/.env")
+	r.AddFinding(report.FindingPostinstallHook, "hook", "/path/pkg.json")
+
+	critical, high, warning := r.CountBySeverity()
+
+	if critical != 1 {
+		t.Errorf("CountBySeverity() critical = %d, want 1", critical)
+	}
+	if high != 2 {
+		t.Errorf("CountBySeverity() high = %d, want 2", high)
+	}
+	if warning != 2 {
+		t.Errorf("CountBySeverity() warning = %d, want 2", warning)
+	}
+}
+
+func TestGetFindingsBySeverity(t *testing.T) {
+	r := report.NewReport("quick", []string{"/home"})
+
+	r.AddFinding(report.FindingMalwareHash, "hash", "/path/malware.js")
+	r.AddFinding(report.FindingNodeModules, "pkg1", "/path1")
+	r.AddFinding(report.FindingCredentialFile, ".env", "/path/.env")
+
+	criticalFindings := r.GetFindingsBySeverity(report.SeverityCritical)
+	if len(criticalFindings) != 1 {
+		t.Errorf("GetFindingsBySeverity(Critical) = %d, want 1", len(criticalFindings))
+	}
+
+	highFindings := r.GetFindingsBySeverity(report.SeverityHigh)
+	if len(highFindings) != 1 {
+		t.Errorf("GetFindingsBySeverity(High) = %d, want 1", len(highFindings))
+	}
+
+	warningFindings := r.GetFindingsBySeverity(report.SeverityWarning)
+	if len(warningFindings) != 1 {
+		t.Errorf("GetFindingsBySeverity(Warning) = %d, want 1", len(warningFindings))
 	}
 }
