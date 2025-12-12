@@ -114,17 +114,16 @@ The available flags map directly to `cmd/scanner/main.go`:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-cache` | System temp dir | Directory in whch to store the compromised package cache file |
+| `-mode` | `quick` | Scan mode: `quick` or `full` |
+| `-report` | `./ShaiHulud-Scan-Report.txt` | File path for the detailed report |
 | `-cache` | system temp dir | Path for compromised package cache file |
+| `-no-banner` | `false` | Do not print the ASCII banner |
 | `-files-only` | `false` | Only scan for malicious files (skip git, npm cache, etc.) |
 | `-strict` | `false` | Exit 1 on ANY finding including warnings (old behavior) |
 | `-warn-only` | `false` | Exit 0 on warnings, only fail on high+ severity findings |
 | `-config` | - | Path to allowlist configuration file (JSON) |
 | `-help` | - | Show help/usage information |
-| `-mode` | `quick` | Scan mode: `quick` or `full` |
 | `-V` | - | Print version and exit |
-| `-no-banner` | `false` | Do not print the ASCII banner |
-| `-report` | `./ShaiHulud-Scan-Report.txt` | File path for the detailed report |
 
 ### Examples
 
