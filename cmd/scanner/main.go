@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,7 +28,7 @@ const bannerNarrow = `
          Supply Chain Malware Detection Scanner
 `
 
-func printBanner(banner *os.File) {
+func printBanner(banner io.Writer) {
 	fmt.Fprintln(banner)
 	fmt.Fprint(banner, bannerNarrow)
 	fmt.Fprintln(banner)

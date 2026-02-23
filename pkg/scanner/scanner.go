@@ -296,7 +296,8 @@ func (s *Scanner) loadCompromisedPackages() error {
 
 		// Save to cache whenever we have any packages (from feeds or cache
 		// fallback). This keeps the cache file up-to-date and refreshes its
-		// modification time when we successfully load data.
+		// modification time when we successfully load data. Cache write errors
+		// are logged but do not fail the scan.
 		if len(allPackages) > 0 && s.config.CacheFile != "" {
 			if err := s.saveCacheFile(allPackages); err != nil {
 				s.log("[!] Failed to save cache file %s: %v", s.config.CacheFile, err)
@@ -304,7 +305,7 @@ func (s *Scanner) loadCompromisedPackages() error {
 		}
 	}
 
-	// Parse packages
+	// Parse package identifiers and optional exact-version constraints.
 	for _, raw := range allPackages {
 		token := compromisedPackageToken(raw)
 		if token == "" {
@@ -349,6 +350,9 @@ func compromisedPackageToken(line string) string {
 	return token
 }
 
+// compromisedPackageVersions extracts exact versions from a CSV-style feed row
+// (for example, "name,= 1.2.3 || = 1.2.4"). It returns nil for plain package
+// feeds or rows without usable exact versions.
 func compromisedPackageVersions(line, token string) []string {
 	line = strings.TrimSpace(line)
 	if line == "" || !strings.Contains(line, ",") {
@@ -674,7 +678,8 @@ func (s *Scanner) scanNpmCache(cachePath string) {
 		}
 
 		name := d.Name()
-		// Check unscoped
+		// npm cache directory names do not reliably expose package versions, so
+		// only version-agnostic feed entries can be matched here.
 		if s.compromisedPkgs[name] && s.isCompromisedPackageNoVersion(name) {
 			s.addFinding(report.FindingNpmCache, name, path)
 			s.log("    [!] FOUND in cache: %s", name)
@@ -1173,18 +1178,19 @@ func (s *Scanner) scanEnvPatterns() {
 			}
 
 			contentStr := string(content)
+			lowerContent := strings.ToLower(contentStr)
 			hasEnvAccess := false
 			hasExfil := false
 
 			for _, pattern := range ioc.EnvAccessPatterns {
-				if strings.Contains(strings.ToLower(contentStr), strings.ToLower(pattern)) {
+				if strings.Contains(lowerContent, strings.ToLower(pattern)) {
 					hasEnvAccess = true
 					break
 				}
 			}
 
 			for _, pattern := range ioc.ExfilPatterns {
-				if strings.Contains(strings.ToLower(contentStr), strings.ToLower(pattern)) {
+				if strings.Contains(lowerContent, strings.ToLower(pattern)) {
 					hasExfil = true
 					break
 				}
@@ -1396,6 +1402,8 @@ func (s *Scanner) scanPnpmLock(lockPath string) {
 	}
 }
 
+// packageLockDep models the subset of npm v6 lockfile dependency entries we
+// need so nested transitive dependencies can be scanned recursively.
 type packageLockDep struct {
 	Version      string                    `json:"version"`
 	Dependencies map[string]packageLockDep `json:"dependencies,omitempty"`
@@ -1423,6 +1431,8 @@ func (s *Scanner) addLockfileFindingIfCompromised(pkgName, version, lockPath str
 	s.log("    [!] LOCKFILE: Compromised package %s in %s", pkgName, lockPath)
 }
 
+// packageNameFromPackageLockPath extracts the package name from an npm v7+
+// package-lock "packages" map key, including nested transitive entries.
 func packageNameFromPackageLockPath(pkgPath string) string {
 	parts := strings.Split(pkgPath, "/")
 	for i := len(parts) - 1; i >= 0; i-- {
@@ -1443,6 +1453,8 @@ func packageNameFromPackageLockPath(pkgPath string) string {
 	return ""
 }
 
+// versionFromLockKey extracts a version token from lockfile keys such as
+// "name@1.2.3" or "@scope/name@1.2.3(...)" (used by pnpm parsing).
 func versionFromLockKey(key, pkgName string) string {
 	if pkgName == "" {
 		return ""
@@ -1463,6 +1475,8 @@ func versionFromLockKey(key, pkgName string) string {
 	return ""
 }
 
+// parseYarnLockHeaderPackages parses a yarn.lock stanza header and returns the
+// distinct package names represented by one or more selectors in that header.
 func parseYarnLockHeaderPackages(header string) []string {
 	seen := make(map[string]bool)
 	var pkgs []string
@@ -1510,10 +1524,13 @@ func (s *Scanner) readPackageVersion(pkgDir string) string {
 	return normalizePackageVersion(meta.Version)
 }
 
+// pathHasDirSegment reports whether path contains segment as a directory/file
+// path component (not just as a substring).
 func pathHasDirSegment(path, segment string) bool {
 	return pathDirSegmentCount(path, segment) > 0
 }
 
+// pathDirSegmentCount counts exact path components named segment.
 func pathDirSegmentCount(path, segment string) int {
 	if segment == "" {
 		return 0
