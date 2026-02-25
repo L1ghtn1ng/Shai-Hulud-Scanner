@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -11,6 +12,7 @@ import (
 var PackageFeedURLs = []string{
 	"https://raw.githubusercontent.com/wiz-sec-public/wiz-research-iocs/refs/heads/main/reports/shai-hulud-2-packages.csv",
 	"https://raw.githubusercontent.com/DataDog/indicators-of-compromise/main/shai-hulud-2.0/shai-hulud-2.0.csv",
+	"https://raw.githubusercontent.com/Idox-GenAI/Shai-Hulud-Scanner/refs/heads/main/resources/ioc-packages-custom.csv",
 }
 
 // MaliciousFileNames contains known Shai-Hulud artifact filenames (workflows/payloads).
@@ -163,12 +165,7 @@ var CompromisedNamespaces = []string{
 
 // IsCompromisedNamespace checks if a namespace is in the compromised list.
 func IsCompromisedNamespace(namespace string) bool {
-	for _, ns := range CompromisedNamespaces {
-		if ns == namespace {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(CompromisedNamespaces, namespace)
 }
 
 // PackageVersionConstraint represents a compromised package and the set of
@@ -270,8 +267,8 @@ func parseVersionSpec(spec string) []string {
 		return versions
 	}
 
-	parts := strings.Split(spec, "||")
-	for _, part := range parts {
+	parts := strings.SplitSeq(spec, "||")
+	for part := range parts {
 		p := strings.TrimSpace(part)
 		if p == "" {
 			continue
@@ -303,22 +300,12 @@ func IsMaliciousSHA1(hash string) (string, bool) {
 
 // IsMaliciousFileName checks if a filename matches known malicious filenames.
 func IsMaliciousFileName(name string) bool {
-	for _, malName := range MaliciousFileNames {
-		if name == malName {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(MaliciousFileNames, name)
 }
 
 // IsSuspiciousFileName checks if a filename should be hash-checked.
 func IsSuspiciousFileName(name string) bool {
-	for _, susName := range SuspiciousFileNames {
-		if name == susName {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(SuspiciousFileNames, name)
 }
 
 // ContainsSuspiciousBranchPattern checks if a branch name contains suspicious patterns.

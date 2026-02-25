@@ -132,24 +132,24 @@ func matchPattern(pattern, value string) bool {
 // matchWildcard performs wildcard matching.
 func matchWildcard(pattern, value string) bool {
 	// Handle @scope/* pattern
-	if strings.HasSuffix(pattern, "/*") {
-		prefix := strings.TrimSuffix(pattern, "/*")
+	if before, ok := strings.CutSuffix(pattern, "/*"); ok {
+		prefix := before
 		if strings.HasPrefix(value, prefix+"/") {
 			return true
 		}
 	}
 
 	// Handle *-suffix pattern
-	if strings.HasPrefix(pattern, "*") {
-		suffix := strings.TrimPrefix(pattern, "*")
+	if after, ok := strings.CutPrefix(pattern, "*"); ok {
+		suffix := after
 		if strings.HasSuffix(value, suffix) {
 			return true
 		}
 	}
 
 	// Handle prefix-* pattern
-	if strings.HasSuffix(pattern, "*") {
-		prefix := strings.TrimSuffix(pattern, "*")
+	if before, ok := strings.CutSuffix(pattern, "*"); ok {
+		prefix := before
 		if strings.HasPrefix(value, prefix) {
 			return true
 		}
@@ -160,34 +160,83 @@ func matchWildcard(pattern, value string) bool {
 
 // matchGlobPattern performs glob-style pattern matching for paths.
 func matchGlobPattern(pattern, path string) bool {
-	// Handle ** for recursive matching
-	if strings.Contains(pattern, "**") {
-		parts := strings.Split(pattern, "**")
-		if len(parts) == 2 {
-			prefix := strings.TrimSuffix(parts[0], "/")
-			suffix := strings.TrimPrefix(parts[1], "/")
+	if pattern == "" {
+		return false
+	}
+	return matchGlobPathSegments(strings.Split(pattern, "/"), strings.Split(path, "/"))
+}
 
-			// Check if path contains the prefix and suffix
-			if prefix == "" && suffix == "" {
-				return true
-			}
-			if prefix == "" {
-				return strings.HasSuffix(path, suffix) || strings.Contains(path, "/"+suffix)
-			}
-			if suffix == "" {
-				return strings.HasPrefix(path, prefix) || strings.Contains(path, prefix+"/")
-			}
-
-			// Check both prefix and suffix
-			prefixIdx := strings.Index(path, prefix)
-			if prefixIdx == -1 {
-				return false
-			}
-			remainingPath := path[prefixIdx+len(prefix):]
-			return strings.Contains(remainingPath, suffix)
-		}
+func matchGlobPathSegments(patternSegs, pathSegs []string) bool {
+	if len(patternSegs) == 0 {
+		return len(pathSegs) == 0
 	}
 
-	// Simple contains check for patterns without **
-	return strings.Contains(path, strings.ReplaceAll(pattern, "*", ""))
+	if patternSegs[0] == "**" {
+		// Collapse consecutive ** to avoid redundant recursion.
+		for len(patternSegs) > 1 && patternSegs[1] == "**" {
+			patternSegs = patternSegs[1:]
+		}
+		if len(patternSegs) == 1 {
+			return true
+		}
+		for i := 0; i <= len(pathSegs); i++ {
+			if matchGlobPathSegments(patternSegs[1:], pathSegs[i:]) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if len(pathSegs) == 0 {
+		return false
+	}
+	if !matchGlobPathSegment(patternSegs[0], pathSegs[0]) {
+		return false
+	}
+	return matchGlobPathSegments(patternSegs[1:], pathSegs[1:])
+}
+
+func matchGlobPathSegment(pattern, segment string) bool {
+	if pattern == "*" {
+		return true
+	}
+	if !strings.Contains(pattern, "*") {
+		return pattern == segment
+	}
+
+	parts := strings.Split(pattern, "*")
+	pos := 0
+
+	// Prefix anchor
+	if first := parts[0]; first != "" {
+		if !strings.HasPrefix(segment, first) {
+			return false
+		}
+		pos = len(first)
+	}
+
+	// Middle fragments
+	for _, part := range parts[1 : len(parts)-1] {
+		if part == "" {
+			continue
+		}
+		idx := strings.Index(segment[pos:], part)
+		if idx < 0 {
+			return false
+		}
+		pos += idx + len(part)
+	}
+
+	// Suffix anchor
+	last := parts[len(parts)-1]
+	if last == "" {
+		return true
+	}
+	if !strings.HasSuffix(segment, last) {
+		return false
+	}
+
+	// Ensure the suffix occurs after the matched prefix/middle sequence.
+	suffixPos := len(segment) - len(last)
+	return suffixPos >= pos
 }
