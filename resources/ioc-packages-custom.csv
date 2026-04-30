@@ -53,3 +53,7 @@ pgserve,= 1.1.11 || = 1.1.12 || = 1.1.13
 @openwebconcept/design-tokens,= 1.0.3
 @openwebconcept/theme-owc,= 1.0.3
 @bitwarden/cli,= 2026.4.0
+mbt,= 1.2.48
+@cap-js/db-service,= 2.10.1
+@cap-js/postgres,= 2.2.2
+@cap-js/sqlite,= 2.2.2
