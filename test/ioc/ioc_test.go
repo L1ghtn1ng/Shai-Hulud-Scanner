@@ -1,6 +1,8 @@
 package ioc_test
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -144,7 +146,10 @@ func TestIsSuspiciousFileName(t *testing.T) {
 		{"bundle.js", "bundle.js", true},
 		{"setup_bun.js", "setup_bun.js", true},
 		{"bun_environment.js", "bun_environment.js", true},
+		{"router_init.js", "router_init.js", true},
+		{"router_runtime.js", "router_runtime.js", true},
 		{"shai-hulud.js", "shai-hulud.js", true},
+		{"tanstack_runner.js", "tanstack_runner.js", true},
 		{"normal.js", "normal.js", false},
 		{"app.js", "app.js", false},
 	}
@@ -409,6 +414,8 @@ func TestIsCompromisedNamespace(t *testing.T) {
 		{"tnf-dev is compromised", "@tnf-dev", true},
 		{"ui-ux-gang is compromised", "@ui-ux-gang", true},
 		{"yoobic is compromised", "@yoobic", true},
+		{"tanstack from custom CSV is compromised", "@tanstack", true},
+		{"opensearch-project from custom CSV is compromised", "@opensearch-project", true},
 		{"random namespace is not compromised", "@random-namespace", false},
 		{"angular is not compromised", "@angular", false},
 		{"types is not compromised", "@types", false},
@@ -435,6 +442,8 @@ func TestCompromisedNamespacesList(t *testing.T) {
 		"@ngx",
 		"@ctrl",
 		"@nativescript-community",
+		"@tanstack",
+		"@opensearch-project",
 	}
 	for _, expected := range expectedNamespaces {
 		found := slices.Contains(ioc.CompromisedNamespaces, expected)
@@ -451,6 +460,32 @@ func TestCompromisedNamespacesList(t *testing.T) {
 	}
 }
 
+func TestCompromisedNamespacesIncludesCustomCSVScopes(t *testing.T) {
+	f, err := os.Open(filepath.Join("..", "..", "resources", "ioc-packages-custom.csv"))
+	if err != nil {
+		t.Fatalf("failed to open custom IOC package CSV: %v", err)
+	}
+	defer f.Close()
+
+	constraints, err := ioc.ParsePackageCSV(f)
+	if err != nil {
+		t.Fatalf("ParsePackageCSV() error = %v", err)
+	}
+
+	for _, constraint := range constraints {
+		if !strings.HasPrefix(constraint.Package, "@") {
+			continue
+		}
+		namespace, _, ok := strings.Cut(constraint.Package, "/")
+		if !ok {
+			t.Fatalf("scoped package %q does not contain a namespace separator", constraint.Package)
+		}
+		if !slices.Contains(ioc.CompromisedNamespaces, namespace) {
+			t.Errorf("CompromisedNamespaces missing custom CSV namespace %q from package %q", namespace, constraint.Package)
+		}
+	}
+}
+
 func TestNewMaliciousSHA256Hashes(t *testing.T) {
 	// Test that new hashes from the shell script are present
 	newHashes := []string{
@@ -458,6 +493,8 @@ func TestNewMaliciousSHA256Hashes(t *testing.T) {
 		"81d2a004a1bca6ef87a1caf7d0e0b355ad1764238e40ff6d1b1cb77ad4f595c3",
 		"83a650ce44b2a9854802a7fb4c202877815274c129af49e6c2d1d5d5d55c501e",
 		"aba1fcbd15c6ba6d9b96e34cec287660fff4a31632bf76f2a766c499f55ca1ee",
+		"ab4fcadaec49c03278063dd269ea5eef82d24f2124a8e15d7b90f2fa8601266c",
+		"2ec78d556d696e208927cc503d48e4b5eb56b31abc2870c2ed2e98d6be27fc96",
 	}
 
 	for _, hash := range newHashes {
