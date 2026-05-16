@@ -29,7 +29,7 @@ The scanner performs the following checks:
 |-------|------------|-----------|-------------|
 | Compromised npm packages | Yes | Yes | Fetches live IOC feeds and scans `node_modules` |
 | Package manifest scanning | Yes | Yes | Detects compromised packages declared in `package.json` before install |
-| Lockfile scanning | Yes | Yes | Detects compromised packages in `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml` |
+| Lockfile scanning | Yes | Yes | Detects compromised packages in `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml` |
 | Compromised namespaces | Yes | Yes | Flags packages from known compromised npm scopes |
 | npm cache scan | No | Yes | Scans npm cache for compromised packages |
 | Malicious file artifacts | Yes | Yes | Detects known Shai-Hulud files (`shai-hulud.js`, `setup_bun.js`, etc.) |
@@ -126,7 +126,7 @@ The available flags map directly to `cmd/scanner/main.go`:
 | `-no-banner` | `false` | Do not print the ASCII banner |
 | `-files-only` | `false` | Only scan for malicious files (skip git, npm cache, etc.) |
 | `-strict` | `false` | Exit 1 on ANY finding including warnings (old behavior) |
-| `-warn-only` | `false` | Exit 0 on warnings, only fail on high+ severity findings |
+| `-warn-only` | `false` | Exit 0 on warnings, only fail on high+ severity findings (matches default behavior; kept for compatibility) |
 | `-config` | - | Path to allowlist configuration file (JSON) |
 | `-update-check` | `false` | Check GitHub releases and download a matching update package |
 | `-help` | - | Show help/usage information |
@@ -153,7 +153,7 @@ shai-hulud-scanner -files-only /workspace
 # Strict mode: fail on ANY finding (old behavior)
 shai-hulud-scanner -strict /path/to/project
 
-# Warn-only mode: only fail on critical findings
+# Warn-only mode: exit 0 on warnings, fail on high+ severity findings
 shai-hulud-scanner -warn-only /path/to/project
 
 # Use an allowlist configuration file
@@ -227,13 +227,13 @@ Findings are classified into three severity levels:
 | Findings Present | Default | `-strict` | `-warn-only` |
 |------------------|---------|-----------|--------------|
 | Critical | Exit 2 | Exit 2 | Exit 2 |
-| High | Exit 1 | Exit 1 | Exit 0 |
+| High | Exit 1 | Exit 1 | Exit 1 |
 | Warning only | Exit 0 | Exit 1 | Exit 0 |
 | None | Exit 0 | Exit 0 | Exit 0 |
 
 **Default behavior**: Warnings alone will NOT fail your CI pipeline. Only high-confidence detections (compromised packages, known malware files) will cause exit code 1.
 
-**Note**: The `-warn-only` flag controls exit codes based on finding severity, while `-files-only` controls what gets scanned (skipping git, npm cache, credentials). They serve different purposes and can be used together.
+**Note**: Warning-only findings do not fail by default. The `-warn-only` flag preserves that behavior for compatibility, while `-strict` fails on warnings and `-files-only` controls what gets scanned (skipping git, npm cache, credentials).
 
 ---
 

@@ -42,8 +42,6 @@ type Config struct {
 	Output     io.Writer
 	// Strict mode: exit 1 on ANY finding (including warnings)
 	Strict bool
-	// WarnOnly mode: exit 0 on warnings, only exit 1 on high+ severity
-	WarnOnly bool
 	// Allowlist configuration for excluding findings
 	Allowlist *config.Allowlist
 }
@@ -1594,7 +1592,7 @@ func (s *Scanner) scanCompromisedNamespaces() {
 	}
 }
 
-// scanLockfiles scans lockfiles (package-lock.json, yarn.lock, pnpm-lock.yaml) for
+// scanLockfiles scans lockfiles (package-lock.json, npm-shrinkwrap.json, yarn.lock, pnpm-lock.yaml) for
 // compromised package versions.
 func (s *Scanner) scanLockfiles() {
 	for _, root := range s.config.RootPaths {
@@ -1614,7 +1612,7 @@ func (s *Scanner) scanLockfiles() {
 
 			name := d.Name()
 			switch name {
-			case "package-lock.json":
+			case "package-lock.json", "npm-shrinkwrap.json":
 				s.scanPackageLockJSON(path)
 			case "yarn.lock":
 				s.scanYarnLock(path)
@@ -1627,7 +1625,7 @@ func (s *Scanner) scanLockfiles() {
 	}
 }
 
-// scanPackageLockJSON scans a package-lock.json file for compromised packages.
+// scanPackageLockJSON scans npm package-lock and shrinkwrap files for compromised packages.
 func (s *Scanner) scanPackageLockJSON(lockPath string) {
 	content, err := os.ReadFile(lockPath)
 	if err != nil {

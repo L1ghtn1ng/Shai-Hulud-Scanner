@@ -11,7 +11,6 @@ func TestExitCodeForReport(t *testing.T) {
 		name            string
 		buildReport     func() *report.Report
 		strict          bool
-		warnOnly        bool
 		reportWriteFail bool
 		want            int
 	}{
@@ -24,24 +23,22 @@ func TestExitCodeForReport(t *testing.T) {
 			want:            1,
 		},
 		{
-			name: "warnings only with warn-only and no write error exits 0",
+			name: "warnings only with no write error exits 0",
 			buildReport: func() *report.Report {
 				r := report.NewReport("quick", []string{"/tmp"})
 				r.AddFinding(report.FindingCredentialFile, ".env", "/tmp/.env")
 				return r
 			},
-			warnOnly: true,
-			want:     0,
+			want: 0,
 		},
 		{
-			name: "high severity in warn-only exits 1",
+			name: "high severity exits 1",
 			buildReport: func() *report.Report {
 				r := report.NewReport("quick", []string{"/tmp"})
 				r.AddFinding(report.FindingNodeModules, "bad-pkg", "/tmp/node_modules/bad-pkg")
 				return r
 			},
-			warnOnly: true,
-			want:     1,
+			want: 1,
 		},
 		{
 			name: "warnings in strict mode exit 1",
@@ -67,7 +64,7 @@ func TestExitCodeForReport(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := exitCodeForReport(tt.buildReport(), tt.strict, tt.warnOnly, tt.reportWriteFail)
+			got := exitCodeForReport(tt.buildReport(), tt.strict, tt.reportWriteFail)
 			if got != tt.want {
 				t.Fatalf("exitCodeForReport() = %d, want %d", got, tt.want)
 			}

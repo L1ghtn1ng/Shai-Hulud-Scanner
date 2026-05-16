@@ -61,13 +61,13 @@ func printUsage() {
 	fmt.Println("  shai-hulud-scanner /path/to/project         # Quick scan of specific path")
 	fmt.Println("  shai-hulud-scanner -mode full -report scan.txt /projects")
 	fmt.Println("  shai-hulud-scanner --strict /path           # Fail on any finding (old behavior)")
-	fmt.Println("  shai-hulud-scanner --warn-only /path        # Only fail on high+ severity")
+	fmt.Println("  shai-hulud-scanner --warn-only /path        # Exit 0 on warnings; fail on high+ severity")
 	fmt.Println("  shai-hulud-scanner --config allowlist.json  # Use allowlist configuration")
 	fmt.Println("  shai-hulud-scanner --update-check           # Check GitHub releases and download an update")
 	fmt.Println()
 }
 
-func exitCodeForReport(rpt *report.Report, strict, warnOnly, reportWriteFailed bool) int {
+func exitCodeForReport(rpt *report.Report, strict, reportWriteFailed bool) int {
 	if rpt == nil {
 		if reportWriteFailed {
 			return 1
@@ -100,12 +100,12 @@ func main() {
 		noBanner    = flag.Bool("no-banner", false, "Do not print the banner")
 		filesOnly   = flag.Bool("files-only", false, "Only scan for malicious files (skip git, npm cache, etc.)")
 		strict      = flag.Bool("strict", false, "Strict mode: exit 1 on ANY finding including warnings (old behavior)")
-		warnOnly    = flag.Bool("warn-only", false, "Warn-only mode: exit 0 on warnings, only fail on high+ severity findings")
 		configPath  = flag.String("config", "", "Path to allowlist configuration file (JSON)")
 		updateCheck = flag.Bool("update-check", false, "Check GitHub releases and download a matching update package")
 		showHelp    = flag.Bool("help", false, "Show help message")
 		showVer     = flag.Bool("V", false, "Show version")
 	)
+	flag.Bool("warn-only", false, "Warn-only mode: exit 0 on warnings, only fail on high+ severity findings")
 
 	flag.Usage = printUsage
 
@@ -202,7 +202,6 @@ func main() {
 	cfg.NoBanner = *noBanner
 	cfg.FilesOnly = *filesOnly
 	cfg.Strict = *strict
-	cfg.WarnOnly = *warnOnly
 	cfg.Allowlist = allowlist
 	if *cachePath != "" {
 		resolvedCachePath := *cachePath
@@ -239,7 +238,7 @@ func main() {
 	fmt.Println("============================================")
 	fmt.Println()
 
-	os.Exit(exitCodeForReport(rpt, *strict, *warnOnly, reportWriteFailed))
+	os.Exit(exitCodeForReport(rpt, *strict, reportWriteFailed))
 }
 
 func runUpdateCheck(currentVersion string) error {

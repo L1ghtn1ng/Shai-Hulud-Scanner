@@ -797,6 +797,69 @@ func TestPackageJSONDependencyRangeWarningsDeferToLocalLockfile(t *testing.T) {
 	}
 }
 
+func TestPackageJSONDependencyRangeWarningsDeferToNpmShrinkwrap(t *testing.T) {
+	origURLs := append([]string(nil), ioc.PackageFeedURLs...)
+	defer func() { ioc.PackageFeedURLs = origURLs }()
+	ioc.PackageFeedURLs = []string{"https://example.invalid/feed.csv"}
+
+	tmpDir := t.TempDir()
+	cacheFile := filepath.Join(tmpDir, "compromised-cache.txt")
+	cacheCSV := "Package,Version\nrange-bad,= 1.2.4\n"
+	if err := os.WriteFile(cacheFile, []byte(cacheCSV), 0o644); err != nil {
+		t.Fatalf("failed to write cache: %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(cacheFile, now, now); err != nil {
+		t.Fatalf("failed to set cache mtime: %v", err)
+	}
+
+	packageJSON := `{"dependencies":{"range-bad":"^1.2.3"}}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(packageJSON), 0o644); err != nil {
+		t.Fatalf("failed to write package.json: %v", err)
+	}
+	shrinkwrap := `{
+  "lockfileVersion": 3,
+  "packages": {
+    "": {"name": "app", "version": "1.0.0"},
+    "node_modules/range-bad": {"version": "1.2.4"}
+  }
+}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "npm-shrinkwrap.json"), []byte(shrinkwrap), 0o644); err != nil {
+		t.Fatalf("failed to write npm-shrinkwrap.json: %v", err)
+	}
+
+	var buf bytes.Buffer
+	cfg := scanner.DefaultConfig()
+	cfg.RootPaths = []string{tmpDir}
+	cfg.ScanMode = scanner.ScanModeQuick
+	cfg.NoBanner = true
+	cfg.FilesOnly = false
+	cfg.CacheFile = cacheFile
+	cfg.ReportPath = filepath.Join(tmpDir, "report.txt")
+	cfg.Output = &buf
+
+	rpt, err := scanner.New(cfg).Run()
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	for _, f := range rpt.GetFindingsByType(report.FindingPackageJSONComp) {
+		if strings.Contains(f.Indicator, "range-bad") {
+			t.Fatalf("range warning should defer to npm-shrinkwrap.json, findings: %+v", rpt.Findings)
+		}
+	}
+	foundLockfile := false
+	for _, f := range rpt.GetFindingsByType(report.FindingLockfileCompromised) {
+		if strings.Contains(f.Indicator, "range-bad") && f.Severity == report.SeverityHigh {
+			foundLockfile = true
+			break
+		}
+	}
+	if !foundLockfile {
+		t.Fatalf("expected npm-shrinkwrap.json to be scanned as lockfile evidence, findings: %+v", rpt.Findings)
+	}
+}
+
 func TestDetectsScopedPackageInYarnLock(t *testing.T) {
 	origURLs := append([]string(nil), ioc.PackageFeedURLs...)
 	defer func() { ioc.PackageFeedURLs = origURLs }()
