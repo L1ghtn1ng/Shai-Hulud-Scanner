@@ -42,3 +42,36 @@ func TestPathDirSegmentCount(t *testing.T) {
 		}
 	}
 }
+
+func TestNPMRangeContainsVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		spec    string
+		version string
+		want    bool
+	}{
+		{"caret includes later patch", "^1.2.3", "1.2.4", true},
+		{"caret includes later minor", "^1.2.3", "1.5.0", true},
+		{"caret excludes next major", "^1.2.3", "2.0.0", false},
+		{"caret zero major excludes next minor", "^0.2.3", "0.3.0", false},
+		{"caret zero minor excludes next patch", "^0.0.3", "0.0.4", false},
+		{"tilde includes patch", "~1.2.3", "1.2.9", true},
+		{"tilde excludes next minor", "~1.2.3", "1.3.0", false},
+		{"comparator set includes bounded version", ">=1.2.3 <2.0.0", "1.9.9", true},
+		{"comparator set excludes upper bound", ">=1.2.3 <2.0.0", "2.0.0", false},
+		{"exact comparator includes same version", "=1.2.3", "1.2.3", true},
+		{"unsupported disjunction does not match", "^1.2.3 || ^2.0.0", "1.5.0", false},
+		{"unsupported tag does not match", "latest", "1.5.0", false},
+		{"prerelease lower than release", ">=1.2.3", "1.2.3-beta.1", false},
+		{"build metadata ignored for range ordering", ">=1.2.3 <1.2.4", "1.2.3+build.1", true},
+		{"v-prefixed version is supported", "^1.2.3", "v1.2.4", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := npmRangeContainsVersion(tt.spec, tt.version); got != tt.want {
+				t.Fatalf("npmRangeContainsVersion(%q, %q) = %v, want %v", tt.spec, tt.version, got, tt.want)
+			}
+		})
+	}
+}

@@ -632,7 +632,7 @@ func TestPackageJSONDependenciesRespectExactVersionPolicy(t *testing.T) {
 
 	packageJSON := `{
   "dependencies": {
-    "versioned-bad": "^1.2.3",
+    "versioned-bad": "^9.9.9",
     "any-bad-plain": "^9.9.9"
   },
   "devDependencies": {
@@ -672,6 +672,128 @@ func TestPackageJSONDependenciesRespectExactVersionPolicy(t *testing.T) {
 	}
 	if !foundAnyVersion {
 		t.Fatalf("expected any-version IOC to be detected from package.json, findings: %+v", findings)
+	}
+}
+
+func TestPackageJSONDependencyRangesWarnWhenTheyCanResolveToCompromisedVersions(t *testing.T) {
+	origURLs := append([]string(nil), ioc.PackageFeedURLs...)
+	defer func() { ioc.PackageFeedURLs = origURLs }()
+	ioc.PackageFeedURLs = []string{"https://example.invalid/feed.csv"}
+
+	tmpDir := t.TempDir()
+	cacheFile := filepath.Join(tmpDir, "compromised-cache.txt")
+	cacheCSV := strings.Join([]string{
+		"Package,Version",
+		"range-bad,= 1.2.4 || = 1.5.0",
+		"clean-range,= 1.2.4",
+		"exact-bad,= 3.0.0",
+		"any-bad,",
+	}, "\n")
+	if err := os.WriteFile(cacheFile, []byte(cacheCSV), 0o644); err != nil {
+		t.Fatalf("failed to write cache: %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(cacheFile, now, now); err != nil {
+		t.Fatalf("failed to set cache mtime: %v", err)
+	}
+
+	packageJSON := `{
+  "dependencies": {
+    "range-bad": "^1.2.3",
+    "clean-range": "^2.0.0",
+    "exact-bad": "3.0.0",
+    "any-bad": "^9.9.9"
+  }
+}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(packageJSON), 0o644); err != nil {
+		t.Fatalf("failed to write package.json: %v", err)
+	}
+
+	var buf bytes.Buffer
+	cfg := scanner.DefaultConfig()
+	cfg.RootPaths = []string{tmpDir}
+	cfg.ScanMode = scanner.ScanModeQuick
+	cfg.NoBanner = true
+	cfg.FilesOnly = false
+	cfg.CacheFile = cacheFile
+	cfg.ReportPath = filepath.Join(tmpDir, "report.txt")
+	cfg.Output = &buf
+
+	rpt, err := scanner.New(cfg).Run()
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	findings := rpt.GetFindingsByType(report.FindingPackageJSONComp)
+	wantSeverities := map[string]report.FindingSeverity{
+		"range-bad": report.SeverityWarning,
+		"exact-bad": report.SeverityHigh,
+		"any-bad":   report.SeverityHigh,
+	}
+	for pkgName, wantSeverity := range wantSeverities {
+		found := false
+		for _, f := range findings {
+			if strings.Contains(f.Indicator, pkgName) {
+				found = true
+				if f.Severity != wantSeverity {
+					t.Fatalf("%s severity = %s, want %s; findings: %+v", pkgName, f.Severity, wantSeverity, findings)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("expected finding for %s, findings: %+v", pkgName, findings)
+		}
+	}
+	for _, f := range findings {
+		if strings.Contains(f.Indicator, "clean-range") {
+			t.Fatalf("clean range should not produce package.json finding, findings: %+v", findings)
+		}
+	}
+}
+
+func TestPackageJSONDependencyRangeWarningsDeferToLocalLockfile(t *testing.T) {
+	origURLs := append([]string(nil), ioc.PackageFeedURLs...)
+	defer func() { ioc.PackageFeedURLs = origURLs }()
+	ioc.PackageFeedURLs = []string{"https://example.invalid/feed.csv"}
+
+	tmpDir := t.TempDir()
+	cacheFile := filepath.Join(tmpDir, "compromised-cache.txt")
+	cacheCSV := "Package,Version\nrange-bad,= 1.2.4\n"
+	if err := os.WriteFile(cacheFile, []byte(cacheCSV), 0o644); err != nil {
+		t.Fatalf("failed to write cache: %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(cacheFile, now, now); err != nil {
+		t.Fatalf("failed to set cache mtime: %v", err)
+	}
+
+	packageJSON := `{"dependencies":{"range-bad":"^1.2.3"}}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(packageJSON), 0o644); err != nil {
+		t.Fatalf("failed to write package.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "package-lock.json"), []byte(`{"lockfileVersion":3}`), 0o644); err != nil {
+		t.Fatalf("failed to write package-lock.json: %v", err)
+	}
+
+	var buf bytes.Buffer
+	cfg := scanner.DefaultConfig()
+	cfg.RootPaths = []string{tmpDir}
+	cfg.ScanMode = scanner.ScanModeQuick
+	cfg.NoBanner = true
+	cfg.FilesOnly = false
+	cfg.CacheFile = cacheFile
+	cfg.ReportPath = filepath.Join(tmpDir, "report.txt")
+	cfg.Output = &buf
+
+	rpt, err := scanner.New(cfg).Run()
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	for _, f := range rpt.GetFindingsByType(report.FindingPackageJSONComp) {
+		if strings.Contains(f.Indicator, "range-bad") {
+			t.Fatalf("range warning should defer to local lockfile, findings: %+v", rpt.Findings)
+		}
 	}
 }
 

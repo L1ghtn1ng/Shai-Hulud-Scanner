@@ -208,7 +208,7 @@ Findings are classified into three severity levels:
 | `node_modules` | High | Known compromised package |
 | `npm-cache` | High | Known compromised package |
 | `lockfile-compromised` | High | Compromised package in lockfile |
-| `package-json-compromised` | High | Compromised package declared before install |
+| `package-json-compromised` | High / Warning | High for exact or fully compromised package declarations; warning for unresolved ranges that can satisfy a compromised version |
 | `file-artifact` | High | Known malicious filename |
 | `git-branch` | High | Specific Shai-Hulud IOC |
 | `git-remote` | High | Specific Shai-Hulud IOC |
