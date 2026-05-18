@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,8 +42,6 @@ type Config struct {
 	Output     io.Writer
 	// Strict mode: exit 1 on ANY finding (including warnings)
 	Strict bool
-	// WarnOnly mode: exit 0 on warnings, only exit 1 on high+ severity
-	WarnOnly bool
 	// Allowlist configuration for excluding findings
 	Allowlist *config.Allowlist
 }
@@ -108,6 +107,18 @@ func (s *Scanner) addFinding(ft report.FindingType, indicator, location string) 
 	}
 	s.mu.Lock()
 	s.report.AddFinding(ft, indicator, location)
+	s.mu.Unlock()
+}
+
+// addFindingWithSeverity adds a finding with a severity override if not excluded by allowlist.
+// This method is thread-safe for use in parallel scans.
+func (s *Scanner) addFindingWithSeverity(ft report.FindingType, severity report.FindingSeverity, indicator, location string) {
+	if s.shouldSkipFinding(ft, indicator, location) {
+		s.log("[*] Skipped (allowlisted): %s - %s", ft, indicator)
+		return
+	}
+	s.mu.Lock()
+	s.report.AddFindingWithSeverity(ft, severity, indicator, location)
 	s.mu.Unlock()
 }
 
@@ -1063,10 +1074,12 @@ func packageJSONDependencyList(raw json.RawMessage) []string {
 
 func (s *Scanner) checkPackageJSONDependencies(pkgPath, section string, deps map[string]string) {
 	for pkgName, spec := range deps {
-		if !s.isCompromisedManifestDependency(pkgName, spec) {
+		severity, ok := s.compromisedManifestDependencySeverity(pkgPath, pkgName, spec)
+		if !ok {
 			continue
 		}
-		s.addFinding(report.FindingPackageJSONComp,
+		s.addFindingWithSeverity(report.FindingPackageJSONComp,
+			severity,
 			fmt.Sprintf("package.json %s declares compromised package: %s@%s", section, pkgName, spec),
 			pkgPath)
 		s.log("    [!] PACKAGE.JSON: Compromised package %s in %s", pkgName, pkgPath)
@@ -1086,12 +1099,21 @@ func (s *Scanner) checkPackageJSONBundledDependencies(pkgPath, section string, d
 	}
 }
 
-func (s *Scanner) isCompromisedManifestDependency(pkgName, spec string) bool {
+func (s *Scanner) compromisedManifestDependencySeverity(pkgPath, pkgName, spec string) (report.FindingSeverity, bool) {
 	if s.isCompromisedPackageNoVersion(pkgName) {
-		return true
+		return report.SeverityHigh, true
 	}
 	version := exactManifestVersion(spec)
-	return version != "" && s.isCompromisedPackageVersion(pkgName, version)
+	if version != "" && s.isCompromisedPackageVersion(pkgName, version) {
+		return report.SeverityHigh, true
+	}
+	if pkgPath != "" && manifestHasLocalLockfile(pkgPath) {
+		return "", false
+	}
+	if s.manifestRangeMayIncludeCompromisedVersion(pkgName, spec) {
+		return report.SeverityWarning, true
+	}
+	return "", false
 }
 
 func exactManifestVersion(spec string) string {
@@ -1106,6 +1128,277 @@ func exactManifestVersion(spec string) string {
 		return ""
 	}
 	return normalizePackageVersion(spec)
+}
+
+func manifestHasLocalLockfile(pkgPath string) bool {
+	for _, lockfileName := range []string{"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml"} {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(pkgPath), lockfileName)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Scanner) manifestRangeMayIncludeCompromisedVersion(pkgName, spec string) bool {
+	if exactManifestVersion(spec) != "" {
+		return false
+	}
+	for version := range s.compromisedVer[pkgName] {
+		if npmRangeContainsVersion(spec, version) {
+			return true
+		}
+	}
+	return false
+}
+
+type npmSemver struct {
+	major      int
+	minor      int
+	patch      int
+	prerelease string
+}
+
+type npmRangeBase struct {
+	version   npmSemver
+	precision int
+}
+
+func npmRangeContainsVersion(spec, version string) bool {
+	spec = strings.TrimSpace(spec)
+	if spec == "" || strings.Contains(spec, "||") {
+		return false
+	}
+	v, ok := parseNPMSemver(version)
+	if !ok {
+		return false
+	}
+
+	switch {
+	case strings.HasPrefix(spec, "^"):
+		return npmCaretRangeContains(strings.TrimSpace(strings.TrimPrefix(spec, "^")), v)
+	case strings.HasPrefix(spec, "~"):
+		return npmTildeRangeContains(strings.TrimSpace(strings.TrimPrefix(spec, "~")), v)
+	default:
+		return npmComparatorSetContains(spec, v)
+	}
+}
+
+func npmCaretRangeContains(baseSpec string, version npmSemver) bool {
+	base, ok := parseNPMRangeBase(baseSpec)
+	if !ok {
+		return false
+	}
+	upper := npmSemver{major: base.version.major + 1}
+	if base.version.major == 0 {
+		upper = npmSemver{minor: base.version.minor + 1}
+	}
+	if base.version.major == 0 && base.precision == 1 {
+		upper = npmSemver{major: 1}
+	}
+	if base.version.major == 0 && base.version.minor == 0 && base.precision == 3 {
+		upper = npmSemver{patch: base.version.patch + 1}
+	}
+	return compareNPMSemver(version, base.version) >= 0 && compareNPMSemver(version, upper) < 0
+}
+
+func npmTildeRangeContains(baseSpec string, version npmSemver) bool {
+	base, ok := parseNPMRangeBase(baseSpec)
+	if !ok {
+		return false
+	}
+	upper := npmSemver{major: base.version.major, minor: base.version.minor + 1}
+	if base.precision == 1 {
+		upper = npmSemver{major: base.version.major + 1}
+	}
+	return compareNPMSemver(version, base.version) >= 0 && compareNPMSemver(version, upper) < 0
+}
+
+func parseNPMRangeBase(raw string) (npmRangeBase, bool) {
+	raw = normalizePackageVersion(raw)
+	raw = strings.TrimPrefix(raw, "v")
+	if raw == "" || strings.ContainsAny(raw, "/:") {
+		return npmRangeBase{}, false
+	}
+
+	base, _, _ := strings.Cut(raw, "+")
+	base, prerelease, _ := strings.Cut(base, "-")
+	parts := strings.Split(base, ".")
+	if len(parts) == 0 || len(parts) > 3 {
+		return npmRangeBase{}, false
+	}
+
+	nums := [3]int{}
+	precision := 0
+	for i, part := range parts {
+		if isNPMWildcardPart(part) {
+			break
+		}
+		n, ok := parseSemverNumber(part)
+		if !ok {
+			return npmRangeBase{}, false
+		}
+		nums[i] = n
+		precision++
+	}
+	if precision == 0 {
+		return npmRangeBase{}, false
+	}
+	return npmRangeBase{
+		version:   npmSemver{major: nums[0], minor: nums[1], patch: nums[2], prerelease: prerelease},
+		precision: precision,
+	}, true
+}
+
+func isNPMWildcardPart(part string) bool {
+	switch strings.ToLower(strings.TrimSpace(part)) {
+	case "x", "*":
+		return true
+	default:
+		return false
+	}
+}
+
+func npmComparatorSetContains(spec string, version npmSemver) bool {
+	comparators := strings.Fields(spec)
+	if len(comparators) == 0 {
+		return false
+	}
+	for _, comparator := range comparators {
+		if !npmComparatorContains(comparator, version) {
+			return false
+		}
+	}
+	return true
+}
+
+func npmComparatorContains(comparator string, version npmSemver) bool {
+	op := ""
+	switch {
+	case strings.HasPrefix(comparator, ">="), strings.HasPrefix(comparator, "<="):
+		op = comparator[:2]
+		comparator = comparator[2:]
+	case strings.HasPrefix(comparator, ">"), strings.HasPrefix(comparator, "<"), strings.HasPrefix(comparator, "="):
+		op = comparator[:1]
+		comparator = comparator[1:]
+	}
+	target, ok := parseNPMSemver(strings.TrimSpace(comparator))
+	if !ok {
+		return false
+	}
+	cmp := compareNPMSemver(version, target)
+	switch op {
+	case "":
+		return cmp == 0
+	case "=":
+		return cmp == 0
+	case ">":
+		return cmp > 0
+	case ">=":
+		return cmp >= 0
+	case "<":
+		return cmp < 0
+	case "<=":
+		return cmp <= 0
+	default:
+		return false
+	}
+}
+
+func parseNPMSemver(raw string) (npmSemver, bool) {
+	raw = normalizePackageVersion(raw)
+	raw = strings.TrimPrefix(raw, "v")
+	if raw == "" || strings.ContainsAny(raw, "*/:") {
+		return npmSemver{}, false
+	}
+
+	base, _, _ := strings.Cut(raw, "+")
+	base, prerelease, _ := strings.Cut(base, "-")
+	parts := strings.Split(base, ".")
+	if len(parts) != 3 {
+		return npmSemver{}, false
+	}
+
+	major, ok := parseSemverNumber(parts[0])
+	if !ok {
+		return npmSemver{}, false
+	}
+	minor, ok := parseSemverNumber(parts[1])
+	if !ok {
+		return npmSemver{}, false
+	}
+	patch, ok := parseSemverNumber(parts[2])
+	if !ok {
+		return npmSemver{}, false
+	}
+	return npmSemver{major: major, minor: minor, patch: patch, prerelease: prerelease}, true
+}
+
+func parseSemverNumber(raw string) (int, bool) {
+	if raw == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+func compareNPMSemver(a, b npmSemver) int {
+	if a.major != b.major {
+		return compareInt(a.major, b.major)
+	}
+	if a.minor != b.minor {
+		return compareInt(a.minor, b.minor)
+	}
+	if a.patch != b.patch {
+		return compareInt(a.patch, b.patch)
+	}
+	return compareSemverPrerelease(a.prerelease, b.prerelease)
+}
+
+func compareInt(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func compareSemverPrerelease(a, b string) int {
+	if a == b {
+		return 0
+	}
+	if a == "" {
+		return 1
+	}
+	if b == "" {
+		return -1
+	}
+
+	aParts := strings.Split(a, ".")
+	bParts := strings.Split(b, ".")
+	for i := 0; i < len(aParts) && i < len(bParts); i++ {
+		if aParts[i] == bParts[i] {
+			continue
+		}
+		aNum, aIsNum := parseSemverNumber(aParts[i])
+		bNum, bIsNum := parseSemverNumber(bParts[i])
+		switch {
+		case aIsNum && bIsNum:
+			return compareInt(aNum, bNum)
+		case aIsNum:
+			return -1
+		case bIsNum:
+			return 1
+		default:
+			return strings.Compare(aParts[i], bParts[i])
+		}
+	}
+	return compareInt(len(aParts), len(bParts))
 }
 
 func (s *Scanner) scanHashes() {
@@ -1350,7 +1643,7 @@ func (s *Scanner) scanCompromisedNamespaces() {
 	}
 }
 
-// scanLockfiles scans lockfiles (package-lock.json, yarn.lock, pnpm-lock.yaml) for
+// scanLockfiles scans lockfiles (package-lock.json, npm-shrinkwrap.json, yarn.lock, pnpm-lock.yaml) for
 // compromised package versions.
 func (s *Scanner) scanLockfiles() {
 	for _, root := range s.config.RootPaths {
@@ -1370,7 +1663,7 @@ func (s *Scanner) scanLockfiles() {
 
 			name := d.Name()
 			switch name {
-			case "package-lock.json":
+			case "package-lock.json", "npm-shrinkwrap.json":
 				s.scanPackageLockJSON(path)
 			case "yarn.lock":
 				s.scanYarnLock(path)
@@ -1383,7 +1676,7 @@ func (s *Scanner) scanLockfiles() {
 	}
 }
 
-// scanPackageLockJSON scans a package-lock.json file for compromised packages.
+// scanPackageLockJSON scans npm package-lock and shrinkwrap files for compromised packages.
 func (s *Scanner) scanPackageLockJSON(lockPath string) {
 	content, err := os.ReadFile(lockPath)
 	if err != nil {

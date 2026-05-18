@@ -9,6 +9,7 @@ format-defaults,= 1.0.0
 hardhta,= 1.0.0
 locale-loader-pro,= 1.0.0
 naniod,= 1.0.0
+node-ipc,= 9.1.6 || = 9.2.3 || = 12.0.1
 node-native-bridge,= 1.0.0
 opencraw,= 2026.2.17
 parse-compat,= 1.0.0

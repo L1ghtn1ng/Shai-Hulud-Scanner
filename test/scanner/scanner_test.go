@@ -632,7 +632,7 @@ func TestPackageJSONDependenciesRespectExactVersionPolicy(t *testing.T) {
 
 	packageJSON := `{
   "dependencies": {
-    "versioned-bad": "^1.2.3",
+    "versioned-bad": "^9.9.9",
     "any-bad-plain": "^9.9.9"
   },
   "devDependencies": {
@@ -667,11 +667,271 @@ func TestPackageJSONDependenciesRespectExactVersionPolicy(t *testing.T) {
 			t.Fatalf("version-specific IOC should not match ranges, non-matching versions, or bundled entries without a version, findings: %+v", findings)
 		}
 		if strings.Contains(f.Indicator, "any-bad-plain") {
+			if f.Severity != report.SeverityHigh {
+				t.Fatalf("any-version package.json finding severity = %s, want %s; findings: %+v", f.Severity, report.SeverityHigh, findings)
+			}
 			foundAnyVersion = true
 		}
 	}
 	if !foundAnyVersion {
 		t.Fatalf("expected any-version IOC to be detected from package.json, findings: %+v", findings)
+	}
+}
+
+func TestPackageJSONDependencyRangesWarnWhenTheyCanResolveToCompromisedVersions(t *testing.T) {
+	origURLs := append([]string(nil), ioc.PackageFeedURLs...)
+	defer func() { ioc.PackageFeedURLs = origURLs }()
+	ioc.PackageFeedURLs = []string{"https://example.invalid/feed.csv"}
+
+	tmpDir := t.TempDir()
+	cacheFile := filepath.Join(tmpDir, "compromised-cache.txt")
+	cacheCSV := strings.Join([]string{
+		"Package,Version",
+		"range-bad,= 1.2.4 || = 1.5.0",
+		"clean-range,= 1.2.4",
+		"exact-bad,= 3.0.0",
+		"any-bad,",
+	}, "\n")
+	if err := os.WriteFile(cacheFile, []byte(cacheCSV), 0o644); err != nil {
+		t.Fatalf("failed to write cache: %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(cacheFile, now, now); err != nil {
+		t.Fatalf("failed to set cache mtime: %v", err)
+	}
+
+	packageJSON := `{
+  "dependencies": {
+    "range-bad": "^1.2.3",
+    "clean-range": "^2.0.0",
+    "exact-bad": "3.0.0",
+    "any-bad": "^9.9.9"
+  }
+}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(packageJSON), 0o644); err != nil {
+		t.Fatalf("failed to write package.json: %v", err)
+	}
+
+	var buf bytes.Buffer
+	cfg := scanner.DefaultConfig()
+	cfg.RootPaths = []string{tmpDir}
+	cfg.ScanMode = scanner.ScanModeQuick
+	cfg.NoBanner = true
+	cfg.FilesOnly = false
+	cfg.CacheFile = cacheFile
+	cfg.ReportPath = filepath.Join(tmpDir, "report.txt")
+	cfg.Output = &buf
+
+	rpt, err := scanner.New(cfg).Run()
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	findings := rpt.GetFindingsByType(report.FindingPackageJSONComp)
+	wantSeverities := map[string]report.FindingSeverity{
+		"range-bad": report.SeverityWarning,
+		"exact-bad": report.SeverityHigh,
+		"any-bad":   report.SeverityHigh,
+	}
+	for pkgName, wantSeverity := range wantSeverities {
+		found := false
+		for _, f := range findings {
+			if strings.Contains(f.Indicator, pkgName) {
+				found = true
+				if f.Severity != wantSeverity {
+					t.Fatalf("%s severity = %s, want %s; findings: %+v", pkgName, f.Severity, wantSeverity, findings)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("expected finding for %s, findings: %+v", pkgName, findings)
+		}
+	}
+	for _, f := range findings {
+		if strings.Contains(f.Indicator, "clean-range") {
+			t.Fatalf("clean range should not produce package.json finding, findings: %+v", findings)
+		}
+	}
+}
+
+func TestPackageJSONCaretAndTildeRangesAppearInReport(t *testing.T) {
+	origURLs := append([]string(nil), ioc.PackageFeedURLs...)
+	defer func() { ioc.PackageFeedURLs = origURLs }()
+	ioc.PackageFeedURLs = []string{"https://example.invalid/feed.csv"}
+
+	tmpDir := t.TempDir()
+	cacheFile := filepath.Join(tmpDir, "compromised-cache.txt")
+	cacheCSV := strings.Join([]string{
+		"Package,Version",
+		"caret-bad,= 1.2.4",
+		"tilde-bad,= 2.3.9",
+		"partial-caret-bad,= 3.4.5",
+		"partial-tilde-bad,= 4.5.6",
+	}, "\n")
+	if err := os.WriteFile(cacheFile, []byte(cacheCSV), 0o644); err != nil {
+		t.Fatalf("failed to write cache: %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(cacheFile, now, now); err != nil {
+		t.Fatalf("failed to set cache mtime: %v", err)
+	}
+
+	packageJSON := `{
+  "dependencies": {
+    "caret-bad": "^1.2.3",
+    "tilde-bad": "~2.3.0",
+    "partial-caret-bad": "^3.4",
+    "partial-tilde-bad": "~4.5"
+  }
+}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(packageJSON), 0o644); err != nil {
+		t.Fatalf("failed to write package.json: %v", err)
+	}
+
+	var buf bytes.Buffer
+	cfg := scanner.DefaultConfig()
+	cfg.RootPaths = []string{tmpDir}
+	cfg.ScanMode = scanner.ScanModeQuick
+	cfg.NoBanner = true
+	cfg.FilesOnly = false
+	cfg.CacheFile = cacheFile
+	cfg.ReportPath = filepath.Join(tmpDir, "report.txt")
+	cfg.Output = &buf
+
+	rpt, err := scanner.New(cfg).Run()
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	var reportText bytes.Buffer
+	if err := rpt.Write(&reportText); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	findings := rpt.GetFindingsByType(report.FindingPackageJSONComp)
+	for _, want := range []string{"caret-bad@^1.2.3", "tilde-bad@~2.3.0", "partial-caret-bad@^3.4", "partial-tilde-bad@~4.5"} {
+		found := false
+		for _, f := range findings {
+			if f.Severity == report.SeverityWarning && strings.Contains(f.Indicator, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected warning package.json finding for %s, findings: %+v", want, findings)
+		}
+		if !strings.Contains(reportText.String(), want) {
+			t.Fatalf("expected rendered report to include %s, report:\n%s", want, reportText.String())
+		}
+	}
+}
+
+func TestPackageJSONDependencyRangeWarningsDeferToLocalLockfile(t *testing.T) {
+	origURLs := append([]string(nil), ioc.PackageFeedURLs...)
+	defer func() { ioc.PackageFeedURLs = origURLs }()
+	ioc.PackageFeedURLs = []string{"https://example.invalid/feed.csv"}
+
+	tmpDir := t.TempDir()
+	cacheFile := filepath.Join(tmpDir, "compromised-cache.txt")
+	cacheCSV := "Package,Version\nrange-bad,= 1.2.4\n"
+	if err := os.WriteFile(cacheFile, []byte(cacheCSV), 0o644); err != nil {
+		t.Fatalf("failed to write cache: %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(cacheFile, now, now); err != nil {
+		t.Fatalf("failed to set cache mtime: %v", err)
+	}
+
+	packageJSON := `{"dependencies":{"range-bad":"^1.2.3"}}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(packageJSON), 0o644); err != nil {
+		t.Fatalf("failed to write package.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "package-lock.json"), []byte(`{"lockfileVersion":3}`), 0o644); err != nil {
+		t.Fatalf("failed to write package-lock.json: %v", err)
+	}
+
+	var buf bytes.Buffer
+	cfg := scanner.DefaultConfig()
+	cfg.RootPaths = []string{tmpDir}
+	cfg.ScanMode = scanner.ScanModeQuick
+	cfg.NoBanner = true
+	cfg.FilesOnly = false
+	cfg.CacheFile = cacheFile
+	cfg.ReportPath = filepath.Join(tmpDir, "report.txt")
+	cfg.Output = &buf
+
+	rpt, err := scanner.New(cfg).Run()
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	for _, f := range rpt.GetFindingsByType(report.FindingPackageJSONComp) {
+		if strings.Contains(f.Indicator, "range-bad") {
+			t.Fatalf("range warning should defer to local lockfile, findings: %+v", rpt.Findings)
+		}
+	}
+}
+
+func TestPackageJSONDependencyRangeWarningsDeferToNpmShrinkwrap(t *testing.T) {
+	origURLs := append([]string(nil), ioc.PackageFeedURLs...)
+	defer func() { ioc.PackageFeedURLs = origURLs }()
+	ioc.PackageFeedURLs = []string{"https://example.invalid/feed.csv"}
+
+	tmpDir := t.TempDir()
+	cacheFile := filepath.Join(tmpDir, "compromised-cache.txt")
+	cacheCSV := "Package,Version\nrange-bad,= 1.2.4\n"
+	if err := os.WriteFile(cacheFile, []byte(cacheCSV), 0o644); err != nil {
+		t.Fatalf("failed to write cache: %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(cacheFile, now, now); err != nil {
+		t.Fatalf("failed to set cache mtime: %v", err)
+	}
+
+	packageJSON := `{"dependencies":{"range-bad":"^1.2.3"}}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(packageJSON), 0o644); err != nil {
+		t.Fatalf("failed to write package.json: %v", err)
+	}
+	shrinkwrap := `{
+  "lockfileVersion": 3,
+  "packages": {
+    "": {"name": "app", "version": "1.0.0"},
+    "node_modules/range-bad": {"version": "1.2.4"}
+  }
+}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "npm-shrinkwrap.json"), []byte(shrinkwrap), 0o644); err != nil {
+		t.Fatalf("failed to write npm-shrinkwrap.json: %v", err)
+	}
+
+	var buf bytes.Buffer
+	cfg := scanner.DefaultConfig()
+	cfg.RootPaths = []string{tmpDir}
+	cfg.ScanMode = scanner.ScanModeQuick
+	cfg.NoBanner = true
+	cfg.FilesOnly = false
+	cfg.CacheFile = cacheFile
+	cfg.ReportPath = filepath.Join(tmpDir, "report.txt")
+	cfg.Output = &buf
+
+	rpt, err := scanner.New(cfg).Run()
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	for _, f := range rpt.GetFindingsByType(report.FindingPackageJSONComp) {
+		if strings.Contains(f.Indicator, "range-bad") {
+			t.Fatalf("range warning should defer to npm-shrinkwrap.json, findings: %+v", rpt.Findings)
+		}
+	}
+	foundLockfile := false
+	for _, f := range rpt.GetFindingsByType(report.FindingLockfileCompromised) {
+		if strings.Contains(f.Indicator, "range-bad") && f.Severity == report.SeverityHigh {
+			foundLockfile = true
+			break
+		}
+	}
+	if !foundLockfile {
+		t.Fatalf("expected npm-shrinkwrap.json to be scanned as lockfile evidence, findings: %+v", rpt.Findings)
 	}
 }
 
@@ -895,8 +1155,12 @@ func TestNodeModulesVersionConstraints_RespectPackageVersion(t *testing.T) {
 
 	writePkgJSON("1.2.3")
 	rpt = run()
-	if got := len(rpt.GetFindingsByType(report.FindingNodeModules)); got != 1 {
+	nodeFindings := rpt.GetFindingsByType(report.FindingNodeModules)
+	if got := len(nodeFindings); got != 1 {
 		t.Fatalf("matching version should be flagged once, got %d findings: %+v", got, rpt.Findings)
+	}
+	if nodeFindings[0].Severity != report.SeverityHigh {
+		t.Fatalf("node_modules finding severity = %s, want %s; finding: %+v", nodeFindings[0].Severity, report.SeverityHigh, nodeFindings[0])
 	}
 }
 
@@ -946,6 +1210,9 @@ func TestPackageLockV3NestedPathDetectionAndVersionMatch(t *testing.T) {
 	found := false
 	for _, f := range rpt.GetFindingsByType(report.FindingLockfileCompromised) {
 		if strings.Contains(f.Indicator, "@evil/nested-pkg") {
+			if f.Severity != report.SeverityHigh {
+				t.Fatalf("lockfile finding severity = %s, want %s; finding: %+v", f.Severity, report.SeverityHigh, f)
+			}
 			found = true
 			break
 		}
