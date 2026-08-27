@@ -55,15 +55,15 @@ The scanner performs the following checks:
 1. Ensure this binary is available on your `PATH`, or correctly installed via your package manager
 1. Run the scanner with appropriate switches (see [CLI Usage](#cli-usage) below)
 
-### From Source (Go 1.26+) for Development
+### From Source (Go 1.27.x) for Development
 
 To compile the source, you will need to install the Go toolchain as this project is implemented in **pure Go**.
 
-- **Minimum Go version**: `1.26`
+- **Go version**: `1.27.x`
 - No CGO dependencies (cross-compilation friendly)
-- This repository is modernized for Go 1.26 (for example, iterator-based string splitting and `sync.WaitGroup.Go` usage)
+- This repository targets Go 1.27 and uses modern APIs such as iterator-based string splitting and `sync.WaitGroup.Go`
 
-Please follow the [instructions appropriate to your platform](https://go.dev/doc/install) and review the [Go 1.26 release notes](https://go.dev/doc/go1.26).
+Please follow the [instructions appropriate to your platform](https://go.dev/doc/install) and review the [Go 1.27 release notes](https://go.dev/doc/go1.27).
 
 Clone the repository and build the CLI:
 
@@ -78,7 +78,7 @@ go test ./...
 go build -o shai-hulud-scanner ./cmd/scanner
 ```
 
-With Go 1.26+ in your `PATH`, you can also use:
+With Go 1.27.x in your `PATH`, you can also use:
 
 ```bash
 go install ./cmd/scanner

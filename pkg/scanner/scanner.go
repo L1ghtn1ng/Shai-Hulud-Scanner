@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1876,8 +1877,8 @@ func (s *Scanner) addLockfileFindingIfCompromised(pkgName, version, lockPath str
 // package-lock "packages" map key, including nested transitive entries.
 func packageNameFromPackageLockPath(pkgPath string) string {
 	parts := strings.Split(pkgPath, "/")
-	for i := len(parts) - 1; i >= 0; i-- {
-		if parts[i] != "node_modules" {
+	for i, part := range slices.Backward(parts) {
+		if part != "node_modules" {
 			continue
 		}
 		if i+1 >= len(parts) {
