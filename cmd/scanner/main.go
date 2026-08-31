@@ -32,9 +32,9 @@ const bannerNarrow = `
 `
 
 func printBanner(banner io.Writer) {
-	fmt.Fprintln(banner)
-	fmt.Fprint(banner, bannerNarrow)
-	fmt.Fprintln(banner)
+	_, _ = fmt.Fprintln(banner)
+	_, _ = fmt.Fprint(banner, bannerNarrow)
+	_, _ = fmt.Fprintln(banner)
 }
 
 func printUsage() {
